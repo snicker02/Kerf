@@ -41,6 +41,7 @@
       <span><i class="sw sw-gouge"></i>Straight gouge</span>
       <span><i class="sw sw-out"></i>Out of reach</span>
     </div>
+    <div id="drop-hint" hidden><div>Drop a 3D model to carve it<small>OBJ · STL · PLY · OFF · GLB · glTF</small></div></div>
     <div id="busy" hidden><div class="spin"></div><span>Working out the carving plan…</span></div>
     <div id="toast" role="status" aria-live="polite"></div>
     <div id="fatal" hidden></div>
@@ -78,6 +79,7 @@
   </section>
 </div>
 
+<input type="file" id="file-in" accept=".obj,.stl,.ply,.off,.glb,.gltf" hidden>
 <iframe id="printframe" title="Print sheets" aria-hidden="true" tabindex="-1"></iframe>
 <script type="module" src="main.js"></script>
 </body>

@@ -6,6 +6,8 @@ import { FACE_ORDER } from './plan.js';
 import { emptyState, cloneState } from './mesh.js';
 import { fmtLen, niceStep, MM_PER_IN } from './units.js';
 import { SURF_BY_ID, MODES } from './tpms.js';
+
+const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 import { jackToolsHTML, jackGripsHTML } from './technique.js';
 
 const ftag = fi => `<b class="ftag">${FACES[fi].id}</b>`;
@@ -42,11 +44,12 @@ export function buildSteps(model, plan, opt) {
   const u = opt.units;
   const L = mm => fmtLen(mm, u);
   const P = model.P, st = model.stats, j = plan.jack, J = j.J;
-  const S = SURF_BY_ID[P.surface];
-  const mode = MODES.find(m => m.id === P.mode);
+  const isMesh = P.kind === 'mesh';
+  const S = isMesh ? null : SURF_BY_ID[P.surface];
+  const mode = isMesh ? null : MODES.find(m => m.id === P.mode);
   const dimsTxt = `${L(P.W)} × ${L(P.D)} × ${L(P.H)}`;
   const boundTxt = P.bound === 'sphere' ? ', finished as a sphere' : P.bound === 'cylinder' ? ', finished as an upright cylinder' : '';
-  const box = P.bound === 'box';
+  const box = isMesh ? false : P.bound === 'box';
   const holesAll = plan.holes.flat();
   const diff = difficulty(model, plan);
   const steps = [];
@@ -57,29 +60,39 @@ export function buildSteps(model, plan, opt) {
 
   // ---------------------------------------------------------------- overview
   const cells = st.cellsAcross;
-  const cellsTxt = cells < 1.15 ? 'One repeat of the pattern fills the block.'
+  const cellsTxt = isMesh ? '' : cells < 1.15 ? 'One repeat of the pattern fills the block.'
     : `About ${cells.toFixed(1).replace(/\.0$/, '')} repeats of the pattern span the block.`;
+  const fixTxt = isMesh ? 'Carving it larger, or simplifying the model there, fixes this' : 'A larger cell size, a negative fill, or a smaller block fixes this';
   const reachTxt = j.outFrac < 0.003
     ? `<p class="ok">Every part of the finished surface is within reach of the Jack’s blades with your hand on the handle.</p>`
-    : `<p class="warn">About <b>${pct(j.outFrac)}</b> of the finished surface sits deeper in a tunnel than any of the Jack’s blades can reach while the handle and your grip still fit, mostly in ${where(j.outAt, model.dims)}. A larger cell size, a negative fill, or a smaller block fixes this. Step “Spots the Jack can’t reach” covers the alternatives.</p>`;
+    : `<p class="warn">About <b>${pct(j.outFrac)}</b> of the finished surface sits deeper than any of the Jack’s blades can reach while the handle and your grip still fit, mostly in ${where(j.outAt, model.dims)}. ${fixTxt}. Step “Spots the Jack can’t reach” covers the alternatives.</p>`;
+  const subject = isMesh
+    ? `<p>Your model <b>${esc(P.name)}</b>, ${L(P.size)} on its longest side, cut from a <b>${dimsTxt}</b> block with your <b>${J.title}</b>.</p>
+<p class="muted">The plan is worked out on a grid of about ${L(model.hmin)}. Details smaller than about ${L(2 * model.hmin)} (fine texture, small lettering) aren't in it: add them freehand at the end, looking at your model.</p>
+${P.watertight === false ? `<p class="warn">The file isn't a closed surface (it has ${P.openEdges} open edges), so Kerf worked out inside and outside by majority vote. Check the 3D view: if something looks filled in or missing, repair the model (most 3D programs have a "make solid" or "close holes" tool) and load it again.</p>` : ''}`
+    : `<p>A <b>${S.name}</b> ${mode.long}, cut from a <b>${dimsTxt}</b> block${boundTxt}, carved with your <b>${J.title}</b>. ${cellsTxt}</p>
+<p class="muted">${S.note}</p>`;
+  const islandTxt = !st.islandCount ? '' : isMesh
+    ? `<p class="warn">${st.islandCount} part${st.islandCount > 1 ? 's' : ''} of the model (${pct(st.islandFrac)} of the wood) ${st.islandCount > 1 ? "don't" : "doesn't"} connect to the main piece and would fall out, so ${st.islandCount > 1 ? 'they are' : 'it is'} treated as waste. Join them in your modelling program, or carve them separately and glue them on.</p>`
+    : `<p class="warn">${st.islandCount} small loose piece${st.islandCount > 1 ? 's' : ''} of the pattern (${pct(st.islandFrac)} of the wood) would fall out of this block, so they are treated as waste. Shifting the pattern (Phase) or changing the cell size can avoid that.</p>`;
   add({
     phase: 'Plan', title: 'What you’re carving', figure: { type: 'net' }, state: final,
-    speak: `A ${S.name} ${mode.name.toLowerCase()} from a ${dimsTxt.replace(/″/g, ' inch')} block, carved with the Carvin' Jack.`,
+    speak: isMesh ? `Your model, ${P.name}, from a ${dimsTxt.replace(/″/g, ' inch')} block, carved with the Carvin' Jack.` : `A ${S.name} ${mode.name.toLowerCase()} from a ${dimsTxt.replace(/″/g, ' inch')} block, carved with the Carvin' Jack.`,
     html: `
-<p>A <b>${S.name}</b> ${mode.long}, cut from a <b>${dimsTxt}</b> block${boundTxt}, carved with your <b>${J.title}</b>. ${cellsTxt}</p>
-<p class="muted">${S.note}</p>
+${subject}
 <div class="kv">
   <div><span>Wood you keep</span><b>${pct(st.keepFrac)}</b></div>
-  <div><span>Waste hidden in curving tunnels</span><b>${pct(st.hiddenFrac)}</b></div>
+  <div><span>${isMesh ? 'Waste behind overhangs' : 'Waste hidden in curving tunnels'}</span><b>${pct(st.hiddenFrac)}</b></div>
   <div><span>Thinnest wall or neck</span><b>≈ ${L(st.thinIn)}</b></div>
   <div><span>Tightest hollow (radius)</span><b>${L(j.r5)}</b></div>
   <div><span>Deepest reach needed (95%)</span><b>${isFinite(j.need95) ? L(j.need95) : '—'}</b></div>
   <div><span>Blade that does most work</span><b>${bladeName(topBlade(j.share))}</b></div>
 </div>
 ${reachTxt}
-<p class="rating ${diff.cls}"><b>${diff.level}.</b> ${diff.why.length ? 'Harder because of ' + diff.why.join(', ') + '.' : 'Big passages, sturdy walls, and flat faces to measure from.'}</p>
-${st.islandCount ? `<p class="warn">${st.islandCount} small loose piece${st.islandCount > 1 ? 's' : ''} of the pattern (${pct(st.islandFrac)} of the wood) would fall out of this block, so they are treated as waste. Shifting the pattern (Phase) or changing the cell size can avoid that.</p>` : ''}
-<p>The plan: ${opt.drill ? 'drill holes to measured depths to clear bulk waste, then ' : ''}cut the block down in even layers from every face with stop cuts and relief cuts. Then open the hidden passages with the hook knife and scorp, and shape each region with the blade whose curve fits it.</p>`,
+<p class="rating ${diff.cls}"><b>${diff.level}.</b> ${diff.why.length ? 'Harder because of ' + diff.why.join(', ') + '.' : isMesh ? 'Sturdy proportions and an open shape.' : 'Big passages, sturdy walls, and flat faces to measure from.'}</p>
+${islandTxt}
+<p>The plan: ${plan.sawFaces.length && opt.saw ? 'saw the outline from two sides, then ' : ''}${opt.drill ? 'drill holes to measured depths to clear bulk waste, then ' : ''}cut the block down in even layers from every face with stop cuts and relief cuts. Then open the ${isMesh ? 'areas behind overhangs' : 'hidden passages'} with the hook knife and scorp, and shape each region with the blade whose curve fits it.</p>
+${isMesh && !opt.saw && plan.sawFaces.length ? `<p class="tip">A coping saw would remove about ${pct(plan.sawFrac)} of the waste in a few minutes by cutting the outline from two sides. Turn on <b>Saw the outline</b> under Plan if you have one.</p>` : ''}`,
   });
 
   // ---------------------------------------------------------------- the Jack
@@ -107,6 +120,7 @@ ${jackGripsHTML(J)}`,
 <li>A leather strop with honing compound, and a dowel wrapped in leather for the inside of the hook and scorps.</li>
 <li>A pencil, a small square or rule with a depth end, and calipers for checking walls.</li>
 <li>A bench hook or a clamp, so you can brace the block for long push cuts instead of holding it in your lap.</li>
+${opt.saw && plan.sawFaces.length ? '<li>A coping saw (or a band saw) and masking tape.</li>' : ''}
 ${opt.drill ? `<li>A drill with ${plan.bitUse.map(b => b.bit.label).join(' and ')} bits and a depth stop (tape flag on the bit is fine).</li>` : ''}
 <li>Sandpaper 120 to 320 and Danish oil or paste wax to finish.</li>
 </ul>`,
@@ -142,6 +156,27 @@ ${opt.drill ? `<li>A drill with ${plan.bitUse.map(b => b.bit.label).join(' and '
 ${opt.drill ? '<li>Prick every hole centre with an awl.</li>' : ''}
 </ol>
 <p class="tip">The paper peels off as you cut. Before it goes, trace the outline into the wood with a light V-scorp groove so you keep the line.</p>`,
+  });
+
+  // ---------------------------------------------------------------- optional: saw the outline
+  if (opt.saw) plan.sawFaces.forEach((fi, n) => {
+    cur.saw = (cur.saw || []).concat([fi]);
+    const other = plan.sawFaces[1 - n];
+    add({
+      phase: 'Saw', title: `Saw the outline from face ${FACES[fi].id}`, face: fi,
+      figure: { type: 'saw', face: fi }, state: cloneState(cur), focus: fi,
+      speak: `Face ${FACES[fi].id} up. Saw along the outline, on the waste side of the line.`,
+      checks: ['Outline sawn', ...(n === 0 && other != null ? ['Offcuts taped back on'] : [])],
+      html: `
+<p>Looking straight at ${fname(fi)}, the model's outline is the <b>saw line</b> on the template. Everything outside it is waste right through the block.</p>
+<ol>
+<li>Clamp the block with ${fname(fi)} facing you. Saw along the line with a coping saw, staying about ${L(plan.sawMargin)} on the waste side and keeping the blade square to the face.</li>
+<li>Cut into tight inside corners from two directions rather than turning the blade hard.</li>
+${n === 0 && other != null ? `<li><b>Keep the offcuts.</b> Tape them back in place so the block is square again. You need flat faces to saw the second outline from ${fname(other)}.</li>` : '<li>Remove the tape and the offcuts. The block now has the model\'s outline from two directions.</li>'}
+</ol>
+<p class="tip">The saw removes the most wood for the least effort. Everything after this is knife work with the Jack.</p>`,
+      blades: [],
+    });
   });
 
   // ---------------------------------------------------------------- optional drilling
@@ -194,12 +229,12 @@ ${firstBand ? '<p class="tip">The layers go round all six faces before going dee
   if (plan.hiddenRough > 0 || st.hiddenFrac > 0.005) {
     cur.hidden = true;
     add({
-      phase: 'Rough', title: 'Open the hidden tunnels', figure: { type: 'slice', mode: 'hidden' }, state: cloneState(cur),
+      phase: 'Rough', title: isMesh ? 'Clear behind the overhangs' : 'Open the hidden tunnels', figure: { type: 'slice', mode: 'hidden' }, state: cloneState(cur),
       hl: { type: 'slice' },
       speak: 'Open the hidden tunnels with the hook knife and gouge scorp, working in from the openings.',
       checks: ['Tunnels opened end to end'],
       html: `
-<p>About <b>${pct(st.hiddenFrac)}</b> of the waste sits in passages that turn corners, so no straight cut from a face reaches it. The layers have opened their mouths; now work inward.</p>
+<p>About <b>${pct(st.hiddenFrac)}</b> of the waste sits ${isMesh ? 'behind overhangs and in pockets' : 'in passages that turn corners'}, so no straight cut from a face reaches it. The layers have opened ${isMesh ? 'the way in' : 'their mouths'}; now work inward.</p>
 <ul>
 <li>The <b>hook knife</b> is the Jack's tool for this. It curls round a corner and cuts as you draw it back toward you in your ${H} hand. It reaches about ${L(J.hookReach)} in.</li>
 <li>In passages narrower than the hook's ${L(J.hookR)} curve, use the <b>gouge scorp</b>.</li>
@@ -238,12 +273,12 @@ ${firstBand ? '<p class="tip">The layers go round all six faces before going dee
   // ---------------------------------------------------------------- final tunnel shaping
   const sh = j.share;
   add({
-    phase: 'Shape', title: 'Shape the tunnels', figure: { type: 'slice', mode: 'final' }, state: final,
+    phase: 'Shape', title: isMesh ? 'Final shaping' : 'Shape the tunnels', figure: { type: 'slice', mode: 'final' }, state: final,
     hl: { type: 'slice' }, toolMap: true,
     speak: 'Blend the tunnels into one continuous surface, following the tool map.',
     checks: ['Tunnels blended into one surface'],
     html: `
-<p>Last carving pass: blend the passages into one continuous surface. The 3D view shows the <b>tool map</b>:</p>
+<p>Last carving pass: ${isMesh ? 'bring every surface to its final shape and blend the areas between faces' : 'blend the passages into one continuous surface'}. The 3D view shows the <b>tool map</b>:</p>
 <ul class="keylist">
 <li><i class="sw sw-hook"></i><b>Hook knife</b>: hollows from ${L(J.hookR)} to ${L(J.flatR)} radius (${pct(sh.hook)}).</li>
 <li><i class="sw sw-scorp"></i><b>Gouge scorp</b>: hollows from ${L(J.scorpR)} to ${L(J.hookR)} (${pct(sh.scorp)}).</li>
@@ -306,9 +341,9 @@ ${j.shortFrac > 0.01 ? `<p class="tip">On about ${pct(j.shortFrac)} of the surfa
   for (const st of steps) {
     if (st.blades) continue;
     if (st.title.startsWith('Layer')) st.blades = ['detail', 'pelican', 'scorp'];
-    else if (st.title === 'Open the hidden tunnels') st.blades = ['hook', 'scorp'];
+    else if (st.title === 'Open the hidden tunnels' || st.title === 'Clear behind the overhangs') st.blades = ['hook', 'scorp'];
     else if (st.title.startsWith('Shape from')) st.blades = ['pelican', 'hook', 'scorp'];
-    else if (st.title === 'Shape the tunnels') st.blades = ['hook', 'scorp', 'gouge', 'pelican'];
+    else if (st.title === 'Shape the tunnels' || st.title === 'Final shaping') st.blades = ['hook', 'scorp', 'gouge', 'pelican'];
     else if (st.title === 'Check the walls') st.blades = ['detail'];
     else if (st.title === 'Square the block and label the faces' || st.title === 'Print and apply the templates') st.blades = st.title.startsWith('Print') ? ['vscorp'] : [];
   }

@@ -72,7 +72,7 @@ function normalAt(F, p, e) {
 // Concave radius at a finished-surface point (Infinity where convex or on a flat cut face).
 export function concaveRadius(model, p) {
   const { F, hmin, P } = model;
-  const e = Math.min(0.5 * hmin, P.cell * 0.01);
+  const e = model.curvEps || Math.min(0.5 * hmin, P.cell * 0.01);
   if (Math.abs(F.tpms(p[0], p[1], p[2])) > hmin || F.bound(p[0], p[1], p[2]) < 0.5 * hmin) return Infinity;
   const k = principalCurvatures(F.tpms, p[0], p[1], p[2], e);
   return k && k[0] < -1e-6 ? -1 / k[0] : Infinity;

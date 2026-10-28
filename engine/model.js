@@ -71,18 +71,23 @@ export function edt3(src, s, stride, hs) {
   return out;
 }
 
-export function buildModel(P) {
+// the planner's lattice for a block of P.W × P.D × P.H at resolution P.res (points along the longest side)
+export function latticeFor(P) {
   const dims = [P.W, P.D, P.H];
   const Lmax = Math.max(...dims);
   const h0 = Lmax / P.res;
   const n = dims.map(d => Math.max(6, Math.round(d / h0)));
   const hs = dims.map((d, i) => d / n[i]);
   const s = n.map(v => v + 1);
-  const N = s[0] * s[1] * s[2];
-  const stride = [1, s[0], s[0] * s[1]];
-  const org = dims.map(d => -d / 2);
-  const hmin = Math.min(...hs);
-  const F = makeField({ ...P, boundEps: 0.01 * hmin });
+  return { dims, Lmax, n, hs, s, N: s[0] * s[1] * s[2], stride: [1, s[0], s[0] * s[1]], org: dims.map(d => -d / 2), hmin: Math.min(...hs) };
+}
+
+// Fext: an external field (e.g. from an imported mesh) with the TPMS field interface
+export function buildModel(P, Fext) {
+  const { dims, Lmax, n, hs, s, N, stride, org, hmin } = latticeFor(P);
+  const F = Fext || makeField({ ...P, boundEps: 0.01 * hmin });
+  const cell = P.cell || Lmax;
+  const curvEps = Fext ? 1.0 * hmin : Math.min(0.5 * hmin, cell * 0.01);
 
   // ---- final solid
   const solid = new Float32Array(N);
@@ -222,9 +227,9 @@ export function buildModel(P) {
   // sheet this is the wall thickness; across a neck it is the neck diameter.
   const radii = [], thick = [], edgeThick = [];
   let saddle = 0, curvN = 0;
-  const e = Math.min(0.5 * hmin, P.cell * 0.01);
+  const e = curvEps;
   const stepIdx = Math.max(1, Math.floor(N / 160000)) * 2 + 1;
-  const rayStep = 0.25 * hmin, rayMax = Math.max(P.cell, Lmax);
+  const rayStep = 0.25 * hmin, rayMax = Math.max(cell, Lmax);
   let rayN = 0;
   for (let idx = 0; idx < N && curvN < 24000; idx += stepIdx) {
     const v = solid[idx];
@@ -237,7 +242,7 @@ export function buildModel(P) {
     if (!kk) continue;
     curvN++;
     if (kk[0] < 0 && kk[1] > 0) saddle++;
-    if (kk[0] < -1e-6) { const r = -1 / kk[0]; if (r < 10 * P.cell) radii.push(r); }
+    if (kk[0] < -1e-6) { const r = -1 / kk[0]; if (r < 10 * cell) radii.push(r); }
     if ((curvN & 3) !== 0) continue;
     // inward normal
     const gx = F.tpms(x + e, y, z) - F.tpms(x - e, y, z), gy = F.tpms(x, y + e, z) - F.tpms(x, y - e, z), gz = F.tpms(x, y, z + e) - F.tpms(x, y, z - e);
@@ -274,7 +279,7 @@ export function buildModel(P) {
   const pct = q => radii.length ? radii[Math.min(radii.length - 1, Math.floor(q * radii.length))] : Infinity;
 
   return {
-    P, F, dims, n, s, hs, N, stride, org, hmin, Lmax,
+    P, F, dims, n, s, hs, N, stride, org, hmin, Lmax, curvEps,
     solid, ds, din, hidden, faces,
     stats: {
       solidCnt, wasteCnt, hiddenCnt,
@@ -284,7 +289,7 @@ export function buildModel(P) {
       empty: keep < 0,
       thinIn, thinInAt, thinEdge, thinEdgeAt,
       curv: { r5: pct(0.05), r15: pct(0.15), rmed: pct(0.5), saddleFrac: curvN ? saddle / curvN : 0, samples: curvN },
-      cellsAcross: Lmax / P.cell,
+      cellsAcross: Lmax / cell,
     },
   };
 }

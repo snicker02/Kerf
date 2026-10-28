@@ -1,16 +1,18 @@
 // Kerf — step-by-step carving guides for the Flexcut Carvin' Jack:
-// mathematical surfaces (gyroids and other TPMS) and classic corner faces.
+// mathematical surfaces (gyroids and other TPMS), classic corner faces, and your own 3D models.
 
 import { SURFACES, MODES, BOUNDS } from './engine/tpms.js';
-import { buildModel } from './engine/model.js';
+import { buildModel, latticeFor } from './engine/model.js';
 import { makePlan, DEFAULT_OPT } from './engine/plan.js';
 import { buildSteps, difficulty } from './engine/steps.js';
 import { surfaceNets, remaining } from './engine/mesh.js';
 import { applyToolData } from './engine/reach.js';
-import { JACK_DEFAULT, JACK_FIELDS, model as jackModel } from './engine/jack.js';
+import { JACK_DEFAULT, JACK_FIELDS } from './engine/jack.js';
 import { buildFaceModel, FACE_DEFAULT, FACE_OPTIONS, FACE_STYLES, normalizeFace, minStickLength } from './engine/face.js';
 import { buildFaceSteps } from './engine/facesteps.js';
 import { reliefMap, shadeRelief } from './engine/facerelief.js';
+import { parseMesh, weld, checkMesh, placeMesh, trefoilKnot, MESH_EXTS } from './engine/meshio.js';
+import { meshSDF, meshField } from './engine/meshsdf.js';
 import { fmtLen, toUnits, fromUnits, MM_PER_IN } from './engine/units.js';
 import { View3D } from './render/view3d.js';
 import { drawFigure } from './render/figures.js';
@@ -21,9 +23,10 @@ import { meshToSTL } from './export/stl.js';
 import { Guide } from './ui/guide.js';
 import { el, section, row, select, segmented, slider, numberField } from './ui/controls.js';
 
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 const $ = id => document.getElementById(id);
 const IN = MM_PER_IN;
+const MAX_TRIANGLES = 3e6;
 
 const PRESETS = [
   { id: 'gyroid-small', name: 'Gyroid block, 3″: best fit for the Jack', P: { surface: 'gyroid', mode: 'netA', cell: 4 * IN, fill: 0, thickness: 0.5 * IN, phase: [0, 0, 0], W: 3 * IN, D: 3 * IN, H: 3 * IN, bound: 'box' } },
@@ -35,11 +38,16 @@ const PRESETS = [
   { id: 'diamond-sheet', name: 'Diamond sheet (advanced)', P: { surface: 'schwarzD', mode: 'sheet', cell: 4 * IN, fill: 0, thickness: 0.5 * IN, phase: [0, 0, 0], W: 4 * IN, D: 4 * IN, H: 4 * IN, bound: 'box' } },
 ];
 
+const SAMPLE_NAME = 'Trefoil knot (sample)';
+const MP_DEFAULT = { name: SAMPLE_NAME, source: 'sample', up: 'z', turn: 0, flip: false, size: 4 * IN, margin: IN / 8, res: 96 };
+
 const S = {
   project: 'surface',
   P: { ...PRESETS[0].P, res: 96 },
   FP: { ...FACE_DEFAULT },
+  MP: { ...MP_DEFAULT },
   opt: { ...DEFAULT_OPT, jack: { ...JACK_DEFAULT }, grain: 'z' },
+  raw: null, rawInfo: null, rawHash: 'sample',
   model: null, plan: null, steps: null, mesh: null, toolMap: false, proj: null,
 };
 
@@ -49,23 +57,49 @@ function loadSaved() {
     const s = JSON.parse(localStorage.getItem('kerf:params') || 'null');
     if (!s) return;
     if (s.P) Object.assign(S.P, s.P);
-    if (s.v === 2) {
+    if (s.v >= 2) {
       if (s.FP) S.FP = normalizeFace({ ...S.FP, ...s.FP });
+      if (s.MP) Object.assign(S.MP, s.MP);
       if (s.opt) { const j = { ...JACK_DEFAULT, ...(s.opt.jack || {}) }; Object.assign(S.opt, s.opt); S.opt.jack = j; }
-      if (s.project === 'face' || s.project === 'surface') S.project = s.project;
+      if (['face', 'surface', 'model'].includes(s.project)) S.project = s.project;
     } else if (s.opt) { S.opt.units = s.opt.units || S.opt.units; S.opt.grain = s.opt.grain || S.opt.grain; }
   } catch (e) { /* storage unavailable */ }
 }
 function save() {
-  try { localStorage.setItem('kerf:params', JSON.stringify({ v: 2, project: S.project, P: S.P, FP: S.FP, opt: S.opt })); } catch (e) { /* ignore */ }
+  try { localStorage.setItem('kerf:params', JSON.stringify({ v: 3, project: S.project, P: S.P, FP: S.FP, MP: S.MP, opt: S.opt })); } catch (e) { /* ignore */ }
 }
-function designKey() {
-  const o = S.opt;
-  const parts = S.project === 'face' ? ['face', S.FP] : ['surface', S.P, o.drill, o.bandStep, o.roughMargin, o.drillMargin];
-  const s = JSON.stringify(parts);
+function hashStr(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return (h >>> 0).toString(36);
+}
+function designKey() {
+  const o = S.opt;
+  const parts = S.project === 'face' ? ['face', S.FP]
+    : S.project === 'model' ? ['model', S.rawHash, S.MP, o.drill, o.saw, o.bandStep, o.roughMargin, o.drillMargin]
+      : ['surface', S.P, o.drill, o.saw, o.bandStep, o.roughMargin, o.drillMargin];
+  return hashStr(JSON.stringify(parts));
+}
+
+// the last model file, kept in IndexedDB (it can be far too big for localStorage)
+function idb() {
+  return new Promise((res, rej) => {
+    try {
+      const r = indexedDB.open('kerf', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    } catch (e) { rej(e); }
+  });
+}
+async function storeFile(name, buffer) {
+  try { const db = await idb(); db.transaction('files', 'readwrite').objectStore('files').put({ name, buffer }, 'model'); } catch (e) { /* storage unavailable */ }
+}
+async function loadStoredFile() {
+  try {
+    const db = await idb();
+    return await new Promise(res => { const r = db.transaction('files').objectStore('files').get('model'); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); });
+  } catch (e) { return null; }
 }
 
 // ---------------------------------------------------------------- UI
@@ -74,6 +108,7 @@ const ctl = {};
 const U = mm => fmtLen(mm, S.opt.units);
 const uv = mm => +toUnits(mm, S.opt.units).toFixed(S.opt.units === 'in' ? 3 : 1);
 const isFace = () => S.project === 'face';
+const isModel = () => S.project === 'model';
 
 function check(label, value, onChange) {
   const id = 'c-' + label.toLowerCase().replace(/[^a-z]+/g, '-');
@@ -87,10 +122,10 @@ function buildPanel() {
   const p = $('panel');
   p.innerHTML = '';
   const sp0 = section(p, 'Project');
-  row(sp0, 'Carve', segmented([{ id: 'surface', name: 'Math surface' }, { id: 'face', name: 'Corner face' }], S.project, v => {
+  row(sp0, 'Carve', segmented([{ id: 'surface', name: 'Math surface' }, { id: 'face', name: 'Corner face' }, { id: 'model', name: 'Your model' }], S.project, v => {
     S.project = v; buildPanel(); recompute(true);
   }));
-  if (isFace()) buildFacePanel(p); else buildSurfacePanel(p);
+  if (isFace()) buildFacePanel(p); else if (isModel()) buildModelPanel(p); else buildSurfacePanel(p);
   buildJackPanel(p);
   buildPlanPanel(p);
   const se = section(p, 'Export', false);
@@ -122,14 +157,19 @@ function buildSurfacePanel(p) {
   const sb = section(p, 'Block');
   ctl.dims = ['W', 'D', 'H'].map((k, i) => row(sb, ['Width', 'Depth', 'Height'][i], numberField({ value: uv(S.P[k]), step: S.opt.units === 'in' ? 0.25 : 5, min: 0.5, suffix: S.opt.units, onChange: v => { S.P[k] = Math.max(15, Math.min(400, fromUnits(v, S.opt.units))); custom(); recompute(); } })).lastChild);
   row(sb, 'Final form', ctl.bound = segmented(BOUNDS, S.P.bound, v => { S.P.bound = v; custom(); recompute(); }));
-  row(sb, 'Grain runs', segmented([{ id: 'x', name: 'Left–right' }, { id: 'y', name: 'Front–back' }, { id: 'z', name: 'Up–down' }], S.opt.grain, v => { S.opt.grain = v; recompute(); }));
+  grainRow(sb);
   syncSurface();
+}
+
+function grainRow(parent) {
+  row(parent, 'Grain runs', segmented([{ id: 'x', name: 'Left–right' }, { id: 'y', name: 'Front–back' }, { id: 'z', name: 'Up–down' }], S.opt.grain, v => { S.opt.grain = v; recompute(); }),
+    isModel() ? 'Run the grain along the longest thin parts (legs, necks, beaks) so they don’t snap.' : null);
 }
 
 function custom() { if (ctl.preset) ctl.preset.value = ''; }
 
 function syncSurface() {
-  if (isFace()) return;
+  if (isFace() || isModel()) return;
   ctl.surface.value = S.P.surface;
   ctl.mode.setValue(S.P.mode);
   ctl.bound.setValue(S.P.bound);
@@ -189,6 +229,30 @@ function buildFacePanel(p) {
   optSel3('mustache', 'Mustache');
 }
 
+function buildModelPanel(p) {
+  const M = S.MP, step = S.opt.units === 'in' ? 0.25 : 5;
+  const sm = section(p, 'Model');
+  const info = S.rawInfo;
+  sm.append(el('div', { class: 'btns' },
+    el('button', { type: 'button', class: 'primary-light', onclick: () => $('file-in').click() }, 'Open a 3D file…'),
+    M.source !== 'sample' ? el('button', { type: 'button', onclick: useSample }, 'Use the sample knot') : null));
+  sm.append(el('div', { class: 'hint' }, `OBJ, STL, PLY, OFF, GLB or glTF. You can also drop a file on the 3D view.`));
+  sm.append(el('div', { class: 'modelinfo' },
+    el('b', {}, M.name),
+    info ? el('span', {}, `${info.triangles.toLocaleString()} triangles · ${info.watertight ? 'closed surface' : `${info.openEdges.toLocaleString()} open edges`}`) : null));
+
+  const sp = section(p, 'Placement');
+  const re = () => { buildPanel(); recompute(true); };
+  row(sp, 'Up axis', segmented([{ id: 'y', name: 'Y up' }, { id: 'z', name: 'Z up' }, { id: 'x', name: 'X up' }], M.up, v => { M.up = v; re(); }), 'Most OBJ and glTF files are Y-up; most STL files are Z-up.');
+  row(sp, 'Turn', segmented([0, 90, 180, 270].map(a => ({ id: String(a), name: `${a}°` })), String(M.turn), v => { M.turn = +v; re(); }), 'Turns the model about the vertical so its front faces face C.');
+  const r = row(sp, 'Flip', el('div', { class: 'checks' }, check('Upside down', M.flip, v => { M.flip = v; re(); })));
+  r.classList.add('check-row');
+  row(sp, 'Longest side', numberField({ value: uv(M.size), step, min: 0.5, suffix: S.opt.units, onChange: v => { M.size = Math.max(0.75 * IN, Math.min(16 * IN, fromUnits(v, S.opt.units))); re(); } }), 'Bigger carvings have bigger details and are easier to reach into.');
+  row(sp, 'Margin', numberField({ value: uv(M.margin), step: S.opt.units === 'in' ? 0.0625 : 1, min: 0, suffix: S.opt.units, onChange: v => { M.margin = Math.max(0, Math.min(IN, fromUnits(v, S.opt.units))); re(); } }), 'Extra wood round the model on every side.');
+  if (S.model && S.model.P.kind === 'mesh') sp.append(el('div', { class: 'hint blockdims' }, `Block: ${U(S.model.P.W)} × ${U(S.model.P.D)} × ${U(S.model.P.H)}`));
+  grainRow(sp);
+}
+
 function buildJackPanel(p) {
   const J = S.opt.jack;
   const sj = section(p, 'Your Jack', false);
@@ -197,24 +261,70 @@ function buildJackPanel(p) {
   for (const f of JACK_FIELDS) {
     const lab = el('label', {}, f.label, el('span', { class: 'src' }, f.source));
     const nf = numberField({ value: uv(J[f.key]), step: S.opt.units === 'in' ? 0.0625 : 0.5, min: 0.5, suffix: S.opt.units, onChange: v => { J[f.key] = Math.max(1, fromUnits(v, S.opt.units)); recompute(); } });
-    const r = el('div', { class: 'row' }, lab, nf);
-    sj.append(r);
+    sj.append(el('div', { class: 'row' }, lab, nf));
   }
   sj.append(el('div', { class: 'hint' }, 'Estimates are not published by Flexcut. Measure your blades with calipers: reach is from the tip to where the blade enters the handle; grip clearance is how wide an opening the handle and your fingers need.'));
   sj.append(el('div', { class: 'btns' }, el('button', { type: 'button', onclick: () => { S.opt.jack = { ...JACK_DEFAULT, hand: J.hand }; buildPanel(); recompute(); } }, 'Reset to defaults')));
 }
 
 function buildPlanPanel(p) {
-  const sl = section(p, 'Plan', false);
+  const sl = section(p, 'Plan', isModel());
   row(sl, 'Units', segmented([{ id: 'in', name: 'Inches' }, { id: 'mm', name: 'Millimetres' }], S.opt.units, v => { S.opt.units = v; buildPanel(); recompute(); }));
   if (isFace()) return;
-  const r = row(sl, 'Drill', el('div', { class: 'checks' }, check('Also use a drill for bulk waste', S.opt.drill, v => { S.opt.drill = v; buildPanel(); recompute(); })), 'Off: everything is done with the Jack.');
+  const r = row(sl, 'Helpers', el('div', { class: 'checks' },
+    check('Saw the outline first', S.opt.saw, v => { S.opt.saw = v; buildPanel(); recompute(); }),
+    check('Drill bulk waste', S.opt.drill, v => { S.opt.drill = v; buildPanel(); recompute(); })), 'Both off: everything is done with the Jack. A coping saw is the quickest way to rough out a figure.');
   r.classList.add('check-row');
   const nf = (key, label, hint) => row(sl, label, numberField({ value: uv(S.opt[key]), step: S.opt.units === 'in' ? 0.0625 : 0.5, min: 0, suffix: S.opt.units, onChange: v => { S.opt[key] = Math.max(0.5, fromUnits(v, S.opt.units)); recompute(); } }), hint);
   if (S.opt.drill) nf('drillMargin', 'Drill margin', 'Wood left above the finished surface at the bottom of each hole.');
   nf('roughMargin', 'Rough margin', 'Stock left on the surface while roughing, for shaping later.');
   nf('bandStep', 'Layer depth', 'How deep each roughing layer goes. Each layer is cut in 1/8″ stop-cut passes.');
-  row(sl, 'Detail', segmented([{ id: '64', name: 'Draft' }, { id: '96', name: 'Normal' }, { id: '128', name: 'Fine' }], String(S.P.res), v => { S.P.res = +v; recompute(); }), 'Finer detail is slower to plan.');
+  const tgt = isModel() ? S.MP : S.P;
+  row(sl, 'Detail', segmented([{ id: '64', name: 'Draft' }, { id: '96', name: 'Normal' }, { id: '128', name: 'Fine' }, { id: '160', name: 'Finest' }], String(tgt.res), v => { tgt.res = +v; recompute(); }), 'Finer detail picks up smaller features but is slower to plan.');
+}
+
+// ---------------------------------------------------------------- model files
+function sampleMesh() { return weld(trefoilKnot()); }
+
+function setRaw(mesh, name, source, hashSeed) {
+  S.raw = mesh;
+  S.rawInfo = checkMesh(mesh);
+  S.rawHash = hashStr(hashSeed + ':' + mesh.indices.length + ':' + Array.from(mesh.positions.subarray(0, 60)).join(','));
+  S.MP.name = name; S.MP.source = source;
+}
+
+function useSample() {
+  setRaw(sampleMesh(), SAMPLE_NAME, 'sample', 'sample');
+  Object.assign(S.MP, { up: 'z', turn: 0, flip: false });
+  S.project = 'model';
+  buildPanel(); recompute(true);
+}
+
+function readMesh(name, buffer) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (!MESH_EXTS.includes(ext)) throw new Error(`Kerf can't read .${ext} files. Use OBJ, STL, PLY, OFF, GLB or glTF.`);
+  const m = weld(parseMesh(name, buffer));
+  if (m.indices.length / 3 > MAX_TRIANGLES) throw new Error(`This model has ${(m.indices.length / 3).toLocaleString()} triangles. Decimate it to under ${MAX_TRIANGLES.toLocaleString()} and try again.`);
+  return { mesh: m, ext };
+}
+
+async function openFile(file) {
+  if (!file) return;
+  setBusy(true);
+  try {
+    const buffer = await file.arrayBuffer();
+    const { mesh, ext } = readMesh(file.name, buffer);
+    setRaw(mesh, file.name, 'file', file.name + file.size);
+    Object.assign(S.MP, { up: ['obj', 'glb', 'gltf'].includes(ext) ? 'y' : 'z', turn: 0, flip: false });
+    S.project = 'model';
+    storeFile(file.name, buffer);
+    buildPanel();
+    recompute(true);
+    toast(`Loaded ${file.name}: ${S.rawInfo.triangles.toLocaleString()} triangles.`);
+  } catch (e) {
+    setBusy(false);
+    toast(e.message || String(e));
+  }
 }
 
 // ---------------------------------------------------------------- compute
@@ -233,6 +343,24 @@ function setBusy(on) {
   clearTimeout(busyTimer);
   if (on) busyTimer = setTimeout(() => { $('busy').hidden = false; }, 120);
   else $('busy').hidden = true;
+}
+
+function plannedProject(model) {
+  const opt = S.opt;
+  const plan = makePlan(model, opt);
+  const steps = buildSteps(model, plan, opt);
+  return {
+    kind: model.P.kind === 'mesh' ? 'model' : 'surface', model, plan, steps, toolUniforms: plan.jack.map,
+    finalMesh: surfaceNets(model, model.solid),
+    meshAt: (state, tool) => {
+      const { R, removedFrac } = remaining(model, plan, state);
+      const m = surfaceNets(model, R);
+      m.removedFrac = removedFrac;
+      if (tool) applyToolData(m, model, plan.jack.J.grip);
+      return m;
+    },
+    draw: (cv, fig, slice) => drawFigure(cv, model, plan, fig, opt, slice),
+  };
 }
 
 function makeProject() {
@@ -265,21 +393,19 @@ function makeProject() {
       draw: (cv, fig) => drawFaceFigure(cv, model, fig, opt),
     };
   }
-  const model = buildModel(S.P);
-  const plan = makePlan(model, opt);
-  const steps = buildSteps(model, plan, opt);
-  return {
-    kind: 'surface', model, plan, steps, toolUniforms: plan.jack.map,
-    finalMesh: surfaceNets(model, model.solid),
-    meshAt: (state, tool) => {
-      const { R, removedFrac } = remaining(model, plan, state);
-      const m = surfaceNets(model, R);
-      m.removedFrac = removedFrac;
-      if (tool) applyToolData(m, model, plan.jack.J.grip);
-      return m;
-    },
-    draw: (cv, fig, slice) => drawFigure(cv, model, plan, fig, opt, slice),
-  };
+  if (isModel()) {
+    if (!S.raw) setRaw(sampleMesh(), SAMPLE_NAME, 'sample', 'sample');
+    const M = S.MP;
+    const placed = placeMesh(S.raw, M);
+    const P = {
+      kind: 'mesh', name: M.name, size: M.size, W: placed.block[0], D: placed.block[1], H: placed.block[2], res: M.res,
+      watertight: S.rawInfo.watertight, openEdges: S.rawInfo.openEdges,
+    };
+    const L = latticeFor(P);
+    const { sdf } = meshSDF(placed, L);
+    return plannedProject(buildModel(P, meshField(sdf, L, L.dims)));
+  }
+  return plannedProject(buildModel(S.P));
 }
 
 let computeToken = 0;
@@ -300,12 +426,13 @@ function recompute(reframe = false) {
         if (reframe || S.framed !== 'face') { view.frame((g.zt - g.zHandle) * 3.1, true); S.framed = 'face'; }
       } else {
         view.setScene(pr.model.dims, S.opt.grain);
-        if (reframe || S.framed !== 'surface') { view.frame(Math.max(...pr.model.dims) * 3.3, false); S.framed = 'surface'; }
+        if (reframe || S.framed !== pr.kind) { view.frame(Math.max(...pr.model.dims) * 3.3, false); S.framed = pr.kind; }
       }
       if (!guide.open) showFinal();
       guide.load(pr, S.opt, designKey());
       if (guide.open) guide.go(Math.min(guide.i, pr.steps.length - 1));
       hud();
+      if (isModel()) { const bd = document.querySelector('.blockdims'); if (bd) bd.textContent = `Block: ${U(pr.model.P.W)} × ${U(pr.model.P.D)} × ${U(pr.model.P.H)}`; else buildPanel(); }
       S.ms = performance.now() - t0;
     } catch (e) { fatal(e); }
     setBusy(false);
@@ -314,7 +441,7 @@ function recompute(reframe = false) {
 
 function showFinal() {
   const pr = S.proj;
-  const tool = S.toolMap && pr.kind === 'surface';
+  const tool = S.toolMap && pr.kind !== 'face';
   if (tool && !S.meshTool) { applyToolData(S.mesh, S.model, S.plan.jack.J.grip); S.meshTool = true; }
   view.setMesh(S.mesh);
   view.setToolMap(tool, pr.toolUniforms);
@@ -344,20 +471,23 @@ function hud() {
 ${g.zHandle + g.H / 2 < 1.2 * P.a ? '<div class="hud-warn">Short handle: use a longer stick</div>' : ''}`;
     return;
   }
-  const st = S.model.stats, j = S.plan.jack;
+  const st = S.model.stats, j = S.plan.jack, P = S.model.P;
   const d = difficulty(S.model, S.plan);
   const holes = S.plan.holes.flat().length;
   const reach = j.outFrac < 0.003 ? '<b class="good">All within reach</b>' : `<b class="bad">${Math.round(j.outFrac * 100)}% out of reach</b>`;
   $('hud').innerHTML = `
+${P.kind === 'mesh' ? `<div class="hud-row"><span>Block</span><b>${U(P.W)} × ${U(P.D)} × ${U(P.H)}</b></div>` : ''}
 <div class="hud-row"><span>Carvin’ Jack</span>${reach}</div>
 <div class="hud-row"><span>Wood kept</span><b>${Math.round(st.keepFrac * 100)}%</b></div>
-<div class="hud-row"><span>Hidden waste</span><b>${Math.round(st.hiddenFrac * 100)}%</b></div>
+<div class="hud-row"><span>${P.kind === 'mesh' ? 'Behind overhangs' : 'Hidden waste'}</span><b>${Math.round(st.hiddenFrac * 100)}%</b></div>
 <div class="hud-row"><span>Thinnest wall</span><b>≈ ${U(st.thinIn)}</b></div>
 <div class="hud-row"><span>Tightest hollow</span><b>r ${U(j.r5)}</b></div>
+${S.opt.saw && S.plan.sawFaces.length ? `<div class="hud-row"><span>Saw removes</span><b>${Math.round(S.plan.sawFrac * 100)}% of waste</b></div>` : ''}
 ${S.opt.drill ? `<div class="hud-row"><span>Drill holes</span><b>${holes}</b></div>` : ''}
 <div class="hud-row"><span>Guide</span><b>${S.steps.length} steps</b></div>
 <div class="hud-diff ${d.cls}">${d.level}</div>
 ${st.islandCount ? `<div class="hud-warn">${st.islandCount} loose piece${st.islandCount > 1 ? 's' : ''} removed</div>` : ''}
+${P.kind === 'mesh' && P.watertight === false ? '<div class="hud-warn">Model has holes: check the 3D view</div>' : ''}
 ${st.thinIn < 4 ? '<div class="hud-warn">Walls under 4 mm: fragile in wood</div>' : ''}`;
 }
 
@@ -387,6 +517,7 @@ function download(name, data, type) {
 }
 function fileStem() {
   if (isFace()) return `kerf-face-${Math.round(toUnits(S.FP.a, S.opt.units) * 100) / 100}${S.opt.units}`;
+  if (isModel()) return `kerf-${S.MP.name.replace(/\.[^.]*$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'model'}-${Math.round(toUnits(S.MP.size, S.opt.units) * 100) / 100}${S.opt.units}`;
   const P = S.P;
   return `kerf-${P.surface}-${P.mode}-${Math.round(toUnits(P.W, S.opt.units) * 100) / 100}${S.opt.units}`;
 }
@@ -421,7 +552,7 @@ function saveSTL() {
 function toast(msg) {
   const t = $('toast');
   t.textContent = msg; t.classList.add('show');
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 4200);
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 5200);
 }
 function fatal(e) {
   console.error(e);
@@ -431,20 +562,43 @@ function fatal(e) {
 }
 
 // ---------------------------------------------------------------- boot
-function boot() {
+function bindDrop() {
+  const stage = $('stage'), hint = $('drop-hint');
+  let depth = 0;
+  const hasFile = e => [...(e.dataTransfer?.types || [])].includes('Files');
+  stage.addEventListener('dragenter', e => { if (!hasFile(e)) return; e.preventDefault(); depth++; hint.hidden = false; });
+  stage.addEventListener('dragover', e => { if (hasFile(e)) e.preventDefault(); });
+  stage.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) hint.hidden = true; });
+  stage.addEventListener('drop', e => {
+    e.preventDefault(); depth = 0; hint.hidden = true;
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) openFile(f);
+  });
+  $('file-in').addEventListener('change', e => { openFile(e.target.files[0]); e.target.value = ''; });
+}
+
+async function boot() {
   $('ver').textContent = 'v' + VERSION;
   loadSaved();
   try {
     view = new View3D($('gl'), $('labels'));
   } catch (e) { fatal(e); return; }
   guide = new Guide({ view, onClose: closeGuideUI, onToolKey: toolKey });
+  if (S.MP.source === 'file') {
+    const f = await loadStoredFile();
+    try {
+      if (f && f.name === S.MP.name) setRaw(readMesh(f.name, f.buffer).mesh, f.name, 'file', f.name + f.buffer.byteLength);
+      else { S.MP = { ...MP_DEFAULT }; }
+    } catch (e) { S.MP = { ...MP_DEFAULT }; }
+  }
   buildPanel();
+  bindDrop();
   $('b-guide').onclick = () => (document.body.classList.contains('guiding') ? guide.close() : openGuide());
   $('b-print').onclick = printSheets;
   $('v-reset').onclick = () => view.resetView();
   $('v-tool').onchange = e => { S.toolMap = e.target.checked; if (!guide.open && S.mesh) showFinal(); };
   $('panel-toggle').onclick = () => document.body.classList.toggle('panel-open');
   recompute(true);
-  window.kerf = { S, view, guide, VERSION, openGuide, recompute, buildPanel };
+  window.kerf = { S, view, guide, VERSION, openGuide, recompute, buildPanel, openFile, useSample };
 }
 boot();

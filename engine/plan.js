@@ -1,7 +1,7 @@
 // Carving plan for the Carvin' Jack: optional depth-stop drilling, layered roughing bands,
 // and which of the Jack's blades each part of the finished surface needs (and whether it can reach).
 
-import { FACES, BIG, oppositeFace } from './model.js';
+import { FACES, BIG, oppositeFace, edt3 } from './model.js';
 import { bitSizes, floorToDisplay } from './units.js';
 import { JACK_DEFAULT, model as jackModel, bladeFor, reachOf } from './jack.js';
 import { survey } from './reach.js';
@@ -14,14 +14,17 @@ export const DEFAULT_OPT = {
   roughMargin: 3.175,
   bandStep: 12.7,      // 1/2"
   drill: false,        // the Jack alone by default; a drill is an optional helper
+  saw: false,          // optional: saw the outline from two sides first
   jack: { ...JACK_DEFAULT },
 };
 
 export function makePlan(model, opt) {
+  const saw = planSaw(model, opt);
   const drill = opt.drill ? planDrilling(model, opt) : noDrilling(model);
-  const bands = planBands(model, opt);
+  if (opt.saw && saw.sawFaces.length) dropSawnHoles(model, drill, saw);
+  const bands = planBands(model, opt, opt.saw ? saw.sawRemoved : null);
   const jack = planJack(model, opt);
-  return { opt, ...drill, ...bands, jack };
+  return { opt, ...saw, ...drill, ...bands, jack };
 }
 
 // ---------------------------------------------------------------- drilling
@@ -81,6 +84,55 @@ function greedyHoles(face, bit, margin, existing, units, cap = 20) {
     vol += Math.PI * r * r * c.d;
   }
   return { holes: taken, vol, bit };
+}
+
+// ---------------------------------------------------------------- sawing the outline
+// For each axis, columns that are waste right through the block can be sawn away from that face.
+// The two axes with the most such columns are the two outlines a carver would saw.
+const SAW_FACE = [4, 2, 0]; // x → E (right), y → C (front), z → A (top)
+function planSaw(model, opt) {
+  const { faces, N, solid } = model;
+  const margin = 1.6;
+  const sawDist = faces.map(() => null);
+  const cand = [];
+  for (let a = 0; a < 3; a++) {
+    const fi = SAW_FACE[a], f = faces[fi];
+    const sil = new Uint8Array(f.nb * f.nc);
+    let thr = 0;
+    for (let c = 0; c < sil.length; c++) { if (f.through[c]) thr++; else sil[c] = 1; }
+    const frac = thr / sil.length;
+    const d = edt3(sil, [f.nb, f.nc, 1], [1, f.nb, f.nb * f.nc], [f.hb, f.hc, 1]);
+    sawDist[fi] = d;
+    let cnt = 0; for (let c = 0; c < d.length; c++) if (d[c] > margin) cnt++;
+    cand.push({ fi, frac: cnt / d.length });
+  }
+  cand.sort((p, q) => q.frac - p.frac);
+  const sawFaces = cand.filter(c => c.frac > 0.03).slice(0, 2).map(c => c.fi);
+  // what the saw removes (union of both outlines), for the other planners and the summary
+  const sawRemoved = new Uint8Array(N);
+  let removed = 0, waste = 0;
+  for (const fi of sawFaces) {
+    const f = faces[fi], d = sawDist[fi];
+    for (let col = 0; col < f.nb * f.nc; col++) {
+      if (d[col] <= margin) continue;
+      let id = f.colStart[col];
+      for (let q = 0; q < f.len; q++, id += f.step) sawRemoved[id] = 1;
+    }
+  }
+  for (let i = 0; i < N; i++) if (solid[i] <= 0) { waste++; if (sawRemoved[i]) removed++; }
+  return { sawFaces, sawDist, sawMargin: margin, sawRemoved, sawFrac: waste ? removed / waste : 0 };
+}
+
+function dropSawnHoles(model, drill, saw) {
+  const { faces, stride, s, org, hs } = model;
+  for (let fi = 0; fi < 6; fi++) {
+    const f = faces[fi];
+    drill.holes[fi] = drill.holes[fi].filter(h => {
+      const w = f.toWorld(h.X, h.Y, Math.min(h.depth, f.full) * 0.5);
+      const i = Math.round((w[0] - org[0]) / hs[0]), j = Math.round((w[1] - org[1]) / hs[1]), k = Math.round((w[2] - org[2]) / hs[2]);
+      return !saw.sawRemoved[Math.min(s[0] - 1, Math.max(0, i)) + Math.min(s[1] - 1, Math.max(0, j)) * stride[1] + Math.min(s[2] - 1, Math.max(0, k)) * stride[2]];
+    });
+  }
 }
 
 function noDrilling(model) {
@@ -169,14 +221,14 @@ function planDrilling(model, opt) {
 
 // ---------------------------------------------------------------- roughing bands
 
-function planBands(model, opt) {
+function planBands(model, opt, sawn) {
   const { faces, ds, N } = model;
   const m = opt.roughMargin, step = opt.bandStep;
   // each roughable waste point belongs to the face that reaches it by the shortest straight cut
   const owner = new Int8Array(N).fill(-1);
   const ownDepth = new Float32Array(N);
   for (let i = 0; i < N; i++) {
-    if (ds[i] <= m) continue;
+    if (ds[i] <= m || (sawn && sawn[i])) continue;
     let best = BIG, bf = -1;
     for (let f = 0; f < 6; f++) { const L = faces[f].los[i]; if (L < best) { best = L; bf = f; } }
     if (bf >= 0) { owner[i] = bf; ownDepth[i] = best; }

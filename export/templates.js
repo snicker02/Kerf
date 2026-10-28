@@ -46,7 +46,7 @@ function edgeText(fi, ox, oy, w, h) {
 }
 
 function drillSheet(model, plan, fi, opt, meta) {
-  const face = model.faces[fi], u = opt.units;
+  const face = model.faces[fi], u = opt.units, drill = !!opt.drill;
   const w = face.wu, h = face.wv;
   const ox = Math.max(14, (PAGE_W - w) / 2), oy = 34;
   const fits = w <= PAGE_W - 20 && h <= PAGE_H - 70;
@@ -54,6 +54,12 @@ function drillSheet(model, plan, fi, opt, meta) {
   let body = `<rect x="${ox}" y="${oy}" width="${f2(w)}" height="${f2(h)}" fill="#fff"/>`;
   body += `<path d="${polysPath(face, sec.polys, ox, oy)}" fill="#e6d3b3" stroke="#e6d3b3" stroke-width="0.12"/>`;
   body += `<path d="${segsPath(face, sec.segs, ox, oy)}" fill="none" stroke="#7a5530" stroke-width="0.35"/>`;
+  if (opt.saw && plan.sawFaces && plan.sawFaces.includes(fi)) {
+    const d = plan.sawDist[fi], g = new Float32Array(d.length);
+    for (let i = 0; i < d.length; i++) g[i] = d[i] - plan.sawMargin;
+    body += `<path d="${segsPath(face, contour2D(g, face.nb, face.nc, face.hb, face.hc, 0).segs, ox, oy)}" fill="none" stroke="#c0501a" stroke-width="0.45" stroke-dasharray="2 1"/>`;
+    body += `<text x="${f2(ox + w - 1)}" y="${f2(oy + h + 4.5)}" font-size="2.6" text-anchor="end" fill="#c0501a">dashed: saw line</text>`;
+  }
   for (const e of plan.exits[fi]) {
     body += `<circle cx="${f2(ox + e.u)}" cy="${f2(oy + e.v)}" r="${f2(e.r)}" fill="none" stroke="#000" stroke-width="0.3" stroke-dasharray="1.2 0.8"/>`;
     body += `<text x="${f2(ox + e.u)}" y="${f2(oy + e.v + e.r + 3)}" font-size="2.4" text-anchor="middle">exit ${FACES[e.from].id}${e.n}</text>`;
@@ -79,7 +85,6 @@ function drillSheet(model, plan, fi, opt, meta) {
   });
   if (rows.length > maxRows) table += `<text x="14" y="${PAGE_H - 18}" font-size="2.8">${rows.length - maxRows} more holes: see the hole table on the cover sheet.</text>`;
   if (!rows.length) table = drill ? `<text x="14" y="${ty}" font-size="3.2">No holes on this face.</text>` : '';
-  const drill = !!opt.drill;
   const title = `<text x="14" y="14" font-size="6" font-family="Georgia, serif" font-weight="700">Face ${FACES[fi].id} · ${FACES[fi].name}</text>
 <text x="14" y="20.5" font-size="3.2">${drill ? 'Drilling template' : 'Layout template'} · ${esc(meta)} · print at 100% (actual size)</text>
 <text x="14" y="25.5" font-size="2.8" fill="#555">${drill ? `Shaded = finished wood at this face. ⊕ = hole centre (prick with an awl). Depths leave ${esc(fmtLen(opt.drillMargin, u))} above the finished surface.` : 'Shaded = finished wood at this face. Your first stop cuts with the detail knife follow the outline.'}</text>`;
@@ -122,9 +127,8 @@ function sheet(inner) {
 
 export function buildPrintHTML(model, plan, opt, version) {
   const P = model.P, u = opt.units;
-  const S = SURF_BY_ID[P.surface], M = MODES.find(m => m.id === P.mode);
   const dims = `${fmtLen(P.W, u)} × ${fmtLen(P.D, u)} × ${fmtLen(P.H, u)}`;
-  const meta = `${S.name} ${M.name.toLowerCase()} · ${dims}`;
+  const meta = P.kind === 'mesh' ? `${P.name} · ${dims}` : `${SURF_BY_ID[P.surface].name} ${MODES.find(m => m.id === P.mode).name.toLowerCase()} · ${dims}`;
   let tables = '';
   for (let fi = 0; fi < 6; fi++) {
     const hs = plan.holes[fi];
@@ -166,7 +170,7 @@ html, body { margin: 0; background: #888; }
 
 export function buildFaceSVG(model, plan, fi, opt, kind = 'drill') {
   const P = model.P;
-  const meta = `${SURF_BY_ID[P.surface].name} · ${fmtLen(P.W, opt.units)} × ${fmtLen(P.D, opt.units)} × ${fmtLen(P.H, opt.units)}`;
+  const meta = `${P.kind === 'mesh' ? P.name : SURF_BY_ID[P.surface].name} · ${fmtLen(P.W, opt.units)} × ${fmtLen(P.D, opt.units)} × ${fmtLen(P.H, opt.units)}`;
   const html = kind === 'drill' ? drillSheet(model, plan, fi, opt, meta) : depthSheet(model, plan, fi, opt, meta);
   return '<?xml version="1.0" encoding="UTF-8"?>\n' + html.replace(/^<section class="sheet">/, '').replace(/<\/section>$/, '');
 }

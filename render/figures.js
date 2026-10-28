@@ -157,6 +157,28 @@ function drawBand(canvas, cssW, model, plan, fig, opt) {
   return legend([['cut', `cut in this layer, down to ${fmtLen(plan.bandDepths[fi][k], opt.units)}`], ['prev', 'cut in earlier layers'], ['wood', 'finished wood at the face'], ['deep', 'waste for later (darker = deeper)']]);
 }
 
+function drawSaw(canvas, cssW, model, plan, fig, opt) {
+  const fi = fig.face, face = model.faces[fi];
+  const { cssH, rect, s } = faceLayout(cssW, face);
+  const ctx = setup(canvas, cssW, cssH);
+  const d = plan.sawDist[fi], m = plan.sawMargin;
+  raster(ctx, rect, face, (X, Y, px, py) => {
+    const v = sample2D(d, face, X, Y);
+    if (v <= 0.01) return woodAt(px, py);
+    if (v <= m) return [236, 224, 200];
+    return ((px + py) % 8 < 3) ? [214, 104, 40] : [246, 205, 160];
+  });
+  const g = new Float32Array(d.length);
+  for (let i = 0; i < d.length; i++) g[i] = d[i] - m;
+  ctx.setLineDash([7, 4]);
+  strokeSegs(ctx, rect, face, contour2D(g, face.nb, face.nc, face.hb, face.hc, 0).segs, '#a2470f', 2);
+  ctx.setLineDash([]);
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+  edgeLabels(ctx, rect, fi);
+  scaleBar(ctx, rect.x, rect.y + rect.h + 30, s, opt.units);
+  return legend([['wood', 'the model’s outline from this side'], ['cut', 'offcut: waste right through the block'], ['saw', 'saw line']]);
+}
+
 function drawContour(canvas, cssW, model, plan, fig, opt) {
   const fi = fig.face, face = model.faces[fi];
   const { cssH, rect, s } = faceLayout(cssW, face);
@@ -294,6 +316,7 @@ export function drawFigure(canvas, model, plan, fig, opt, ui) {
   switch (fig.type) {
     case 'drill': return drawDrill(canvas, cssW, model, plan, fig, opt);
     case 'band': return drawBand(canvas, cssW, model, plan, fig, opt);
+    case 'saw': return drawSaw(canvas, cssW, model, plan, fig, opt);
     case 'contour': return drawContour(canvas, cssW, model, plan, fig, opt);
     case 'net': return drawNet(canvas, cssW, model, plan, fig, opt);
     case 'slice': return drawSlice(canvas, cssW, model, plan, fig, opt, ui);

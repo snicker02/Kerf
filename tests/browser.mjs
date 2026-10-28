@@ -96,6 +96,47 @@ await p2.screenshot({ path: `${out}/print-face.png` });
 const stl = await page.evaluate(async () => { const m = await import('./export/stl.js'); return m.meshToSTL(window.kerf.S.mesh).size; });
 console.log('face stl bytes', stl);
 
+// ---- your model: sample, then real files through the file picker
+const MODELS = process.env.KERF_MODELS;
+await page.click('#panel .seg button[data-v="model"]');
+await ready();
+await page.waitForTimeout(900);
+await page.screenshot({ path: `${out}/model-sample.png` });
+console.log('model sample', JSON.stringify(await page.evaluate(() => ({ name: window.kerf.S.MP.name, block: [window.kerf.S.model.P.W, window.kerf.S.model.P.D, window.kerf.S.model.P.H].map(v => +(v / 25.4).toFixed(2)), steps: window.kerf.S.steps.length, out: window.kerf.S.plan.jack.outFrac, ms: Math.round(window.kerf.S.ms) }))));
+if (MODELS) {
+  for (const f of ['knot.stl', 'knot.glb', 'knot-ascii.ply', 'knot.off', 'duck.obj']) {
+    await page.setInputFiles('#file-in', `${MODELS}/${f}`);
+    await page.waitForFunction(n => window.kerf.S.MP.name === n, f, { timeout: 60000 });
+    await ready();
+    await page.waitForTimeout(600);
+    const st = await page.evaluate(() => ({ name: window.kerf.S.MP.name, up: window.kerf.S.MP.up, tris: window.kerf.S.rawInfo.triangles, closed: window.kerf.S.rawInfo.watertight, block: [window.kerf.S.model.P.W, window.kerf.S.model.P.D, window.kerf.S.model.P.H].map(v => +(v / 25.4).toFixed(2)), keep: +(window.kerf.S.model.stats.keepFrac * 100).toFixed(1), out: +(window.kerf.S.plan.jack.outFrac * 100).toFixed(1), steps: window.kerf.S.steps.length, ms: Math.round(window.kerf.S.ms) }));
+    console.log('model file', JSON.stringify(st));
+  }
+  await page.screenshot({ path: `${out}/model-duck.png` });
+  // the duck with the saw on: walk the guide
+  await page.evaluate(() => { window.kerf.S.opt.saw = true; window.kerf.buildPanel(); window.kerf.recompute(); });
+  await page.waitForTimeout(150);
+  await ready();
+  await walk('duck');
+  await page.click('#v-tool');
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: `${out}/model-duck-toolmap.png` });
+  await page.click('#v-tool');
+  // a reload keeps the last file
+  await page.reload();
+  await ready();
+  console.log('after reload', JSON.stringify(await page.evaluate(() => ({ project: window.kerf.S.project, name: window.kerf.S.MP.name, tris: window.kerf.S.rawInfo && window.kerf.S.rawInfo.triangles }))));
+  // a bad file shows a message instead of breaking
+  await page.setInputFiles('#file-in', { name: 'broken.obj', mimeType: 'text/plain', buffer: Buffer.from('this is not a model') });
+  await page.waitForTimeout(800);
+  console.log('bad file toast:', await page.evaluate(() => document.getElementById('toast').textContent), '| still showing', await page.evaluate(() => window.kerf.S.MP.name));
+  const sheets = await page.evaluate(async () => { const m = await import('./export/templates.js'); const { S, VERSION } = window.kerf; return m.buildPrintHTML(S.model, S.plan, S.opt, VERSION); });
+  const p3 = await browser.newPage({ viewport: { width: 900, height: 1180 } });
+  await p3.setContent(sheets);
+  await p3.evaluate(() => window.scrollTo(0, 1 * 1056 + 30));
+  await p3.screenshot({ path: `${out}/print-duck.png` });
+}
+
 // every surface preset computes without errors
 await page.click('#panel .seg button[data-v="surface"]');
 await ready();

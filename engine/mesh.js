@@ -3,10 +3,10 @@
 import { BIG } from './model.js';
 
 export function emptyState() {
-  return { drill: [], bands: [0, 0, 0, 0, 0, 0], hidden: false, shaped: [false, false, false, false, false, false], final: false };
+  return { saw: [], drill: [], bands: [0, 0, 0, 0, 0, 0], hidden: false, shaped: [false, false, false, false, false, false], final: false };
 }
 export function cloneState(st) {
-  return { drill: st.drill.slice(), bands: st.bands.slice(), hidden: st.hidden, shaped: st.shaped.slice(), final: st.final };
+  return { saw: (st.saw || []).slice(), drill: st.drill.slice(), bands: st.bands.slice(), hidden: st.hidden, shaped: st.shaped.slice(), final: st.final };
 }
 
 // R > 0 where wood is still present.
@@ -19,6 +19,7 @@ export function remaining(model, plan, st) {
   const drillF = (plan ? st.drill : []).map(fi => ({ f: faces[fi], c: plan.drillCols[fi] }));
   const bandF = [];
   for (let fi = 0; fi < 6; fi++) if (st.bands[fi] > 0) bandF.push({ los: faces[fi].los, d: st.bands[fi] });
+  const sawF = (plan && st.saw ? st.saw : []).map(fi => ({ f: faces[fi], d: plan.sawDist[fi], m: plan.sawMargin }));
   const shapeF = [];
   for (let fi = 0; fi < 6; fi++) if (st.shaped[fi]) shapeF.push(faces[fi].los);
   const co = [0, 0, 0];
@@ -38,6 +39,11 @@ export function remaining(model, plan, st) {
         const dx = Math.min(i, n[0] - i) * hs[0];
         const stock = Math.min(dx, dy, dz) + eps;
         let w = cap;
+        for (let q = 0; q < sawF.length; q++) {
+          const S = sawF[q], f = S.f;
+          const sd = S.m - S.d[co[f.b] + f.nb * co[f.c]];
+          if (sd < w) w = sd;
+        }
         for (let q = 0; q < drillF.length; q++) {
           const D = drillF[q], f = D.f;
           const col = co[f.b] + f.nb * co[f.c];
