@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kerf</title>
+<meta name="description" content="Step-by-step wood carving guides for gyroids and other triply periodic minimal surfaces.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <button id="panel-toggle" class="icon-btn" aria-label="Show settings" title="Settings">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M5 26 L16 5 L27 26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M10.5 26 C13 18 19 18 21.5 26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+    <span class="name">Kerf</span><span class="ver" id="ver"></span>
+  </div>
+  <div class="tagline" id="tagline">carving guides for the Flexcut Carvin’ Jack</div>
+  <div class="top-actions">
+    <button id="b-print" type="button">Print templates</button>
+    <button id="b-guide" type="button" class="primary">Start carving guide</button>
+  </div>
+</header>
+
+<div id="app">
+  <aside id="panel" aria-label="Design settings"></aside>
+
+  <main id="stage">
+    <canvas id="gl" aria-label="3D view of the carving"></canvas>
+    <div id="labels" aria-hidden="true"></div>
+    <div id="hud" aria-live="polite"></div>
+    <div id="viewbar">
+      <button id="v-reset" type="button">Reset view</button>
+      <label class="tog" id="v-tool-wrap"><input type="checkbox" id="v-tool"> Tool map</label>
+    </div>
+    <div id="toolkey" hidden aria-label="Tool map key">
+      <span><i class="sw sw-wood"></i>Pelican knife</span>
+      <span><i class="sw sw-hook"></i>Hook knife</span>
+      <span><i class="sw sw-scorp"></i>Gouge scorp</span>
+      <span><i class="sw sw-gouge"></i>Straight gouge</span>
+      <span><i class="sw sw-out"></i>Out of reach</span>
+    </div>
+    <div id="busy" hidden><div class="spin"></div><span>Working out the carving plan…</span></div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <div id="fatal" hidden></div>
+  </main>
+
+  <section id="guide" hidden aria-label="Carving guide">
+    <div class="g-top">
+      <button id="g-close" type="button" class="ghost">✕ Close</button>
+      <select id="g-jump" aria-label="Jump to step"></select>
+      <button id="g-speak" type="button" class="ghost" aria-pressed="false" title="Read each step aloud">Read aloud</button>
+    </div>
+    <div class="g-bar"><div id="g-fill"></div></div>
+    <div id="g-scroll">
+      <div class="g-head">
+        <span id="g-phase" class="phase"></span>
+        <span id="g-count" class="count"></span>
+      </div>
+      <h2 id="g-title"></h2>
+      <div id="g-blades" class="bchips"></div>
+      <div id="g-removed" class="removed" hidden></div>
+      <div id="g-figwrap">
+        <div id="g-figctl" hidden></div>
+        <canvas id="g-fig"></canvas>
+        <div id="g-legend"></div>
+      </div>
+      <div id="g-body" class="prose"></div>
+      <div id="g-table"></div>
+      <div id="g-checks"></div>
+    </div>
+    <div class="g-nav">
+      <button id="g-prev" type="button">‹ Back</button>
+      <button id="g-next" type="button" class="ghost">Skip ›</button>
+      <button id="g-done" type="button" class="primary">Done — next step</button>
+    </div>
+  </section>
+</div>
+
+<iframe id="printframe" title="Print sheets" aria-hidden="true" tabindex="-1"></iframe>
+<script type="module" src="main.js"></script>
+</body>
+</html>
