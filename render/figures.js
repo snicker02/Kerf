@@ -22,7 +22,7 @@ function depthRGB(t) {
 }
 
 function setup(canvas, cssW, cssH) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = canvas._dpr || Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
   canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
   const ctx = canvas.getContext('2d');
@@ -312,7 +312,7 @@ function legend(items) {
 
 // ------------------------------------------------------------------ entry
 export function drawFigure(canvas, model, plan, fig, opt, ui) {
-  const cssW = Math.max(240, Math.floor(canvas.parentElement.clientWidth));
+  const cssW = Math.max(240, Math.floor((canvas.parentElement && canvas.parentElement.clientWidth) || canvas._cssW || 520));
   switch (fig.type) {
     case 'drill': return drawDrill(canvas, cssW, model, plan, fig, opt);
     case 'band': return drawBand(canvas, cssW, model, plan, fig, opt);

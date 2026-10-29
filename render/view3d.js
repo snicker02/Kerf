@@ -322,21 +322,27 @@ export class View3D {
     this.dirty = true;
   }
 
-  focusFace(fi) {
+  faceAngles(fi) {
     const n = faceNormal(FACES[fi]);
     let yaw = this.yaw, pitch;
     if (n[2] > 0) pitch = 1.05;
     else if (n[2] < 0) pitch = -1.05;
     else { yaw = Math.atan2(n[1], n[0]) + 0.42; pitch = 0.42; }
-    // shortest way round
+    return [yaw, pitch];
+  }
+  focusFace(fi) { const [y, p] = this.faceAngles(fi); this.lookFrom(y, p); }
+  // turn the camera to a yaw/pitch (radians), the shortest way round; instant skips the animation
+  lookFrom(yaw, pitch, instant = false) {
     while (yaw - this.yaw > Math.PI) yaw -= 2 * Math.PI;
     while (yaw - this.yaw < -Math.PI) yaw += 2 * Math.PI;
+    if (instant) { this.anim = null; this.yaw = yaw; this.pitch = pitch; this.dirty = true; return; }
     this.anim = { t0: performance.now(), from: [this.yaw, this.pitch], to: [yaw, pitch] };
   }
-  frame(dist, cornerMode) {
-    this.dist = dist; this.cornerMode = !!cornerMode; this.cornerDist = dist; this._sized = true;
+  frame(dist, cornerMode, home) {
+    this.dist = dist; this.homeDist = dist; this.cornerMode = !!cornerMode; this.cornerDist = dist; this._sized = true;
+    this.home = home || [-0.95, 0.5];
     if (cornerMode) this.lookCorner();
-    else this.anim = { t0: performance.now(), from: [this.yaw, this.pitch], to: [-0.95, 0.5] };
+    else this.lookFrom(this.home[0], this.home[1]);
     this.dirty = true;
   }
 
@@ -349,8 +355,9 @@ export class View3D {
   }
   resetView() {
     if (this.cornerMode) { this.lookCorner(); this.dist = this.cornerDist; this.dirty = true; return; }
-    this.anim = { t0: performance.now(), from: [this.yaw, this.pitch], to: [-0.95, 0.5] };
-    this.dist = Math.max(...this.dims) * 3.3;
+    const h = this.home || [-0.95, 0.5];
+    this.lookFrom(h[0], h[1]);
+    this.dist = this.homeDist || Math.max(...this.dims) * 3.3;
   }
 
   _tick() {
@@ -373,7 +380,8 @@ export class View3D {
     const w = Math.max(1, Math.round(c.clientWidth * dpr)), h = Math.max(1, Math.round(c.clientHeight * dpr));
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     gl.viewport(0, 0, w, h);
-    gl.clearColor(0.105, 0.094, 0.082, 1);
+    const bg = this.bg || [0.105, 0.094, 0.082];
+    gl.clearColor(bg[0], bg[1], bg[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const cp = Math.cos(this.pitch);
     const eye = [this.target[0] + this.dist * cp * Math.cos(this.yaw), this.target[1] + this.dist * cp * Math.sin(this.yaw), this.target[2] + this.dist * Math.sin(this.pitch)];

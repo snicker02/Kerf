@@ -17,6 +17,7 @@
   --navy: #2c4c68;
   --panel-w: 300px;
   --top-h: 52px;
+  --foot-h: 22px;
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -49,7 +50,7 @@ button.ghost { background: transparent; }
 .icon-btn { display: none; padding: 6px; line-height: 0; }
 
 /* ---------- layout */
-#app { position: absolute; top: var(--top-h); left: 0; right: 0; bottom: 0; display: flex; }
+#app { position: absolute; top: var(--top-h); left: 0; right: 0; bottom: var(--foot-h); display: flex; }
 #panel { width: var(--panel-w); flex: none; overflow-y: auto; border-right: 1px solid var(--line); background: var(--bg2); padding: 6px 0 24px; }
 #stage { position: relative; flex: 1; min-width: 0; }
 #gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
@@ -253,3 +254,51 @@ table.holes input, .check input { accent-color: #8c4a14; width: 16px; height: 16
 .modelinfo span { color: var(--muted); }
 button.primary-light { background: #4a3f31; border-color: #5a4f40; }
 .blockdims { color: var(--text); font-size: 12.5px; margin: -4px 0 12px; }
+
+/* ---------- credit */
+#credit { position: absolute; left: 0; right: 0; bottom: 0; height: var(--foot-h); display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--muted); background: var(--bg2); border-top: 1px solid var(--line); letter-spacing: .02em; }
+
+/* ---------- shop mode: big type and buttons for the bench */
+#shopbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 14px; background: #efe4cf; border-bottom: 1px solid var(--paper2); }
+#shopbar select { width: auto; background: #fff; color: var(--ink); border-color: #d9cfbd; }
+.strop-time { font: 600 15px var(--sans); font-variant-numeric: tabular-nums; color: var(--ink); padding: 4px 10px; background: #fff; border-radius: 8px; border: 1px solid #d9cfbd; }
+.strop-time.due { background: var(--red); color: #fff; border-color: var(--red); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .65; } }
+#heard { font-size: 13px; color: var(--ink-muted); font-style: italic; }
+#shop-exit { margin-left: auto; }
+#mic.on, #g-shop.on { background: #e9dcc4 !important; }
+body.shop #guide { width: min(820px, 64vw); }
+body.shop #g-scroll { padding: 20px 28px 28px; }
+body.shop #g-title { font-size: 34px; }
+body.shop .prose { font-size: 20px; line-height: 1.55; }
+body.shop .prose .tip, body.shop .prose .warn { font-size: 18px; }
+body.shop .check { padding: 14px 16px; font-size: 18px; }
+body.shop .check input { width: 26px; height: 26px; }
+body.shop .bchip { font-size: 15px; padding: 5px 12px; }
+body.shop .g-nav { padding: 14px; gap: 14px; }
+body.shop .g-nav button { flex: 1; min-height: 84px; font-size: 24px; font-weight: 700; border-radius: 14px; }
+body.shop .g-nav #g-next { flex: 0.6; font-size: 18px; }
+body.shop #g-done { margin-left: 0; }
+body.shop .g-top { padding: 12px 14px; }
+body.shop .g-top button, body.shop #shopbar button, body.shop #shopbar select { min-height: 44px; font-size: 16px; }
+@media (max-width: 860px) {
+  body.shop #guide { width: 100%; }
+  body.shop.guiding #stage { flex: 0 0 26vh; }
+  body.shop #g-title { font-size: 26px; }
+  body.shop .prose { font-size: 18px; }
+  body.shop .g-nav button { min-height: 70px; font-size: 20px; }
+}
+#strop-alert { position: fixed; inset: 0; z-index: 50; background: rgba(20, 16, 12, .72); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.strop-card { background: var(--paper); color: var(--ink); border-radius: 18px; padding: 28px 30px; max-width: 520px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.strop-big { font: 700 44px/1.1 var(--serif); margin-bottom: 10px; }
+.strop-card p { font-size: 17px; line-height: 1.5; margin: 0 0 20px; }
+.strop-btns { display: flex; gap: 12px; flex-wrap: wrap; }
+.strop-btns button { flex: 1; min-height: 72px; font-size: 22px; font-weight: 700; border-radius: 14px; background: #fff; color: var(--ink); border: 1px solid #d9cfbd; }
+.strop-btns button.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.phase[data-phase="outline"] { background: #dbe3ec; color: #354c66; }
+.phase[data-phase="lower"] { background: #f5dcc2; color: #8c4a14; }
+.phase[data-phase="carve"] { background: #f5dcc2; color: #8c4a14; }
+.phase[data-phase="refine"] { background: #e8dcc5; color: #6a4a22; }
+.phase[data-phase="prepare"], .phase[data-phase="plan"] { background: var(--paper2); color: var(--ink-muted); }
+@media (max-width: 860px) { body.shop .g-top { flex-wrap: wrap; } body.shop .g-top select { order: 5; flex: 1 1 100%; } }

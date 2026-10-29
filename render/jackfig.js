@@ -6,7 +6,7 @@ const INK = '#2a241f', STEEL = '#c9ccd0', STEEL2 = '#8f959c', HANDLE = '#b7bcc2'
 const COLORS = { pelican: '#b48f5e', hook: '#2f8f8a', scorp: '#d18a1e', gouge: '#7b5cb0' };
 
 function setup(canvas, cssW, cssH) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = canvas._dpr || Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
   canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
   const ctx = canvas.getContext('2d');

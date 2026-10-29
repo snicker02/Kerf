@@ -1,0 +1,12 @@
+{
+  "name": "Kerf: carving guides for the Carvin' Jack",
+  "short_name": "Kerf",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1b1814",
+  "theme_color": "#24201b",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

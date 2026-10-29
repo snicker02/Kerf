@@ -4,7 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kerf</title>
-<meta name="description" content="Step-by-step wood carving guides for gyroids and other triply periodic minimal surfaces.">
+<meta name="description" content="Step-by-step wood carving guides for the Flexcut Carvin' Jack: gyroids, corner faces, your own 3D models, chip carving, spoons, ball-in-cage and chain puzzles, and reliefs from a photo.">
+<meta name="theme-color" content="#24201b">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -41,7 +45,7 @@
       <span><i class="sw sw-gouge"></i>Straight gouge</span>
       <span><i class="sw sw-out"></i>Out of reach</span>
     </div>
-    <div id="drop-hint" hidden><div>Drop a 3D model to carve it<small>OBJ · STL · PLY · OFF · GLB · glTF</small></div></div>
+    <div id="drop-hint" hidden><div>Drop a 3D model or a picture<small>OBJ · STL · PLY · OFF · GLB · glTF · PNG · JPEG</small></div></div>
     <div id="busy" hidden><div class="spin"></div><span>Working out the carving plan…</span></div>
     <div id="toast" role="status" aria-live="polite"></div>
     <div id="fatal" hidden></div>
@@ -52,6 +56,17 @@
       <button id="g-close" type="button" class="ghost">✕ Close</button>
       <select id="g-jump" aria-label="Jump to step"></select>
       <button id="g-speak" type="button" class="ghost" aria-pressed="false" title="Read each step aloud">Read aloud</button>
+      <button id="g-shop" type="button" class="ghost" title="Big buttons, strop reminder and voice commands for the bench">Shop mode</button>
+    </div>
+    <div id="shopbar" hidden>
+      <span id="strop-time" class="strop-time">Strop in 20:00</span>
+      <select id="strop-every" aria-label="Strop reminder">
+        <option value="15">every 15 min</option><option value="20">every 20 min</option><option value="30">every 30 min</option><option value="45">every 45 min</option><option value="0">off</option>
+      </select>
+      <button id="strop-now" type="button">Stropped</button>
+      <button id="mic" type="button" title="Say “next”, “back”, “repeat”, “done” or “stropped”">Voice: off</button>
+      <span id="heard" aria-live="polite"></span>
+      <button id="shop-exit" type="button" class="ghost">Exit shop mode</button>
     </div>
     <div class="g-bar"><div id="g-fill"></div></div>
     <div id="g-scroll">
@@ -80,6 +95,15 @@
 </div>
 
 <input type="file" id="file-in" accept=".obj,.stl,.ply,.off,.glb,.gltf" hidden>
+<input type="file" id="img-in" accept="image/*" hidden>
+<div id="strop-alert" hidden role="alertdialog" aria-label="Strop reminder">
+  <div class="strop-card">
+    <div class="strop-big">Time to strop</div>
+    <p>A few passes on the strop for each blade you've been using keeps the edges keen. Sharp tools are safer: they cut where you aim and don't need forcing.</p>
+    <div class="strop-btns"><button id="strop-ok" type="button" class="primary">Stropped</button><button id="strop-snooze" type="button">Remind me in 5 min</button></div>
+  </div>
+</div>
+<footer id="credit">Created with help from Claude AI</footer>
 <iframe id="printframe" title="Print sheets" aria-hidden="true" tabindex="-1"></iframe>
 <script type="module" src="main.js"></script>
 </body>

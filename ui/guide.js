@@ -8,17 +8,18 @@ import { fmtLen } from '../engine/units.js';
 const $ = id => document.getElementById(id);
 
 export class Guide {
-  constructor({ view, onClose, onToolKey }) {
+  constructor({ view, onClose, onToolKey, onStep }) {
     this.view = view;
     this.onClose = onClose;
     this.onToolKey = onToolKey || (() => {});
+    this.onStep = onStep || (() => {});
     this.i = 0;
     this.cache = new Map();
     this.slice = { axis: 2, index: 0 };
     this.speakOn = false;
     $('g-prev').onclick = () => this.go(this.i - 1);
     $('g-next').onclick = () => this.go(this.i + 1);
-    $('g-done').onclick = () => { this._markAll(true); this.go(this.i + 1); };
+    $('g-done').onclick = () => this.done();
     $('g-close').onclick = () => this.close();
     $('g-jump').onchange = e => this.go(+e.target.value);
     $('g-speak').onclick = () => {
@@ -29,8 +30,9 @@ export class Guide {
     };
     window.addEventListener('keydown', e => {
       if (!this.open || e.target.matches('input, select, textarea')) return;
-      if (e.key === 'ArrowRight') { this.go(this.i + 1); e.preventDefault(); }
-      else if (e.key === 'ArrowLeft') { this.go(this.i - 1); e.preventDefault(); }
+      // arrows, and PageDown/PageUp, which is what Bluetooth page-turner pedals send
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') { this.go(this.i + 1); e.preventDefault(); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { this.go(this.i - 1); e.preventDefault(); }
       else if (e.key === 'Escape') this.close();
     });
     new ResizeObserver(() => { if (this.open) this._figure(); }).observe($('g-figwrap'));
@@ -88,11 +90,17 @@ export class Guide {
     this._apply3D(st);
     $('g-scroll').scrollTop = 0;
     if (this.speakOn) this._speak();
+    this.onStep(i, st);
     // warm the cache for the next step while the person reads this one
     clearTimeout(this._pre);
     const nx = this.steps[i + 1];
     if (nx) this._pre = setTimeout(() => { if (this.open && this.i === i) this.meshFor(nx.state, !!nx.toolMap); }, 400);
   }
+
+  next() { this.go(this.i + 1); }
+  back() { this.go(this.i - 1); }
+  done() { this._markAll(true); if (this.i < this.steps.length - 1) this.go(this.i + 1); else this.go(this.i); }
+  speak() { this._speak(); }
 
   _speak() {
     const st = this.steps[this.i];
@@ -153,7 +161,7 @@ export class Guide {
     const cv = $('g-fig');
     if (!st || st.figure.type === 'none') { cv.hidden = true; $('g-legend').innerHTML = ''; return; }
     cv.hidden = false;
-    $('g-legend').innerHTML = this.project.draw(cv, st.figure, this.slice) || '';
+    $('g-legend').innerHTML = this.project.draw(cv, st.figure, this.slice, st.state) || '';
   }
 
   _table(st) {
@@ -226,6 +234,7 @@ export class Guide {
     if (st.hl && st.hl.type === 'slice') this._sliceHL();
     else this.view.setHighlight(st.hl, this.model, this.plan);
     if (st.corner) this.view.lookCorner();
+    else if (st.view) this.view.lookFrom(st.view.yaw, st.view.pitch);
     else if (st.focus != null) this.view.focusFace(st.focus);
   }
 }

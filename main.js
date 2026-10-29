@@ -1,5 +1,6 @@
 // Kerf — step-by-step carving guides for the Flexcut Carvin' Jack:
-// mathematical surfaces (gyroids and other TPMS), classic corner faces, and your own 3D models.
+// mathematical surfaces (gyroids and other TPMS), classic corner faces, your own 3D models,
+// chip carving, spoons, ball-in-cage and chain puzzles, and reliefs from a photo.
 
 import { SURFACES, MODES, BOUNDS } from './engine/tpms.js';
 import { buildModel, latticeFor } from './engine/model.js';
@@ -22,8 +23,19 @@ import { buildFacePrintHTML } from './export/facetemplate.js';
 import { meshToSTL } from './export/stl.js';
 import { Guide } from './ui/guide.js';
 import { el, section, row, select, segmented, slider, numberField } from './ui/controls.js';
+import { stagedMesh } from './engine/staged.js';
+import { buildChip, CHIP_DEFAULT, CHIP_PARAMS } from './engine/chip.js';
+import { buildSpoon, SPOON_DEFAULT, SPOON_PARAMS } from './engine/spoon.js';
+import { buildCage, buildChain, CAGE_DEFAULT, CAGE_PARAMS, CHAIN_DEFAULT, CHAIN_PARAMS } from './engine/cage.js';
+import { buildRelief, RELIEF_DEFAULT, RELIEF_PARAMS, sampleImage } from './engine/relief.js';
+import { drawChipFigure, chipSheets } from './render/chipfig.js';
+import { drawSpoonFigure, spoonSheets } from './render/spoonfig.js';
+import { drawPuzzleFigure, cageSheets, chainSheets } from './render/puzzlefig.js';
+import { drawReliefFigure, reliefSheets } from './render/relieffig.js';
+import { Shop } from './ui/shop.js';
+import { buildBooklet } from './export/booklet.js';
 
-export const VERSION = '1.3.0';
+export const VERSION = '2.0.0';
 const $ = id => document.getElementById(id);
 const IN = MM_PER_IN;
 const MAX_TRIANGLES = 3e6;
@@ -41,11 +53,53 @@ const PRESETS = [
 const SAMPLE_NAME = 'Trefoil knot (sample)';
 const MP_DEFAULT = { name: SAMPLE_NAME, source: 'sample', up: 'z', turn: 0, flip: false, size: 4 * IN, margin: IN / 8, res: 96 };
 
+const PROJECTS = [
+  { id: 'surface', name: 'Math surface (gyroid and friends)' },
+  { id: 'face', name: 'Corner face' },
+  { id: 'model', name: 'Your 3D model' },
+  { id: 'chip', name: 'Chip carving' },
+  { id: 'spoon', name: 'Spoon' },
+  { id: 'cage', name: 'Ball in a cage' },
+  { id: 'chain', name: 'Wooden chain' },
+  { id: 'relief', name: 'Relief from a photo' },
+];
+const fmtU = (mm, u) => fmtLen(mm, u);
+// projects built as an ordered list of cuts (engine/staged.js)
+const STAGED = {
+  chip: {
+    key: 'CP', def: CHIP_DEFAULT, params: CHIP_PARAMS, build: (P, opt) => buildChip(P, opt), draw: drawChipFigure, sheets: chipSheets,
+    home: [-Math.PI / 2, 1.05], title: P => `Chip-carved ${P.shape} board`, slug: (P, u) => `chip-${P.pattern.replace('+', '-')}-${Math.round(toUnits(P.size, u) * 100) / 100}${u}`,
+    hud: (m, u) => { const pat = m.pat; return { rows: [['Board', `${fmtU(m.P.size, u)} ${m.P.shape}`], ['Chips', pat.chips.length], ['Rings and borders', pat.groups.length], ['Deepest chip', fmtU(pat.maxDepth, u)]], diff: pat.chips.length < 60 ? ['easy', 'Good first pattern'] : pat.chips.length < 160 ? ['mid', 'An afternoon’s work'] : ['hard', 'Lots of chips'] }; },
+  },
+  spoon: {
+    key: 'SP', def: SPOON_DEFAULT, params: SPOON_PARAMS, build: (P, opt) => buildSpoon(P, opt), draw: drawSpoonFigure, sheets: spoonSheets,
+    home: [-0.95, 0.55], title: P => `${P.bowlShape[0].toUpperCase() + P.bowlShape.slice(1)}-bowl spoon`, slug: (P, u) => `spoon-${Math.round(toUnits(P.length, u) * 100) / 100}${u}`,
+    hud: (m, u, opt) => { const G = m.G, hookR = opt.jack.hookR; const fits = hookR <= G.hookR.across; return { rows: [['Blank', `${fmtU(G.blank[0], u)} × ${fmtU(G.blank[1], u)} × ${fmtU(G.blank[2], u)}`], ['Bowl', `${fmtU(m.P.bowlLen, u)} × ${fmtU(m.P.bowlWidth, u)}, ${fmtU(G.depth, u)} deep`], ['Crank', fmtU(m.P.crank, u)], ['Hook knife', fits ? '<b class="good">Fits the bowl</b>' : '<b class="bad">Bowl too tight</b>']], diff: G.depth > 15 || m.P.crank > 20 ? ['mid', 'Moderate'] : ['easy', 'Good first spoon'] }; },
+  },
+  cage: {
+    key: 'KP', def: CAGE_DEFAULT, params: CAGE_PARAMS, build: (P, opt) => buildCage(P, opt), draw: drawPuzzleFigure, sheets: cageSheets,
+    home: [-0.8, 0.35], title: P => `Ball in a cage${P.balls > 1 ? ` (${P.balls} balls)` : ''}`, slug: (P, u) => `cage-${Math.round(toUnits(P.width, u) * 100) / 100}${u}`,
+    hud: (m, u) => { const G = m.G; return { rows: [['Block', `${fmtU(G.a, u)} × ${fmtU(G.a, u)} × ${fmtU(G.H, u)}`], ['Ball', fmtU(G.d, u)], ['Gap between posts', fmtU(G.gap, u)], ['Ball stays caged', G.ok ? '<b class="good">Yes</b>' : '<b class="bad">No</b>']], diff: G.n > 1 ? ['hard', 'Advanced'] : ['mid', 'Moderate'], warn: G.notes.map(t => t.replace(/ to %[dh].*| so .*/, '')) }; },
+  },
+  chain: {
+    key: 'NP', def: CHAIN_DEFAULT, params: CHAIN_PARAMS, build: (P, opt) => buildChain(P, opt), draw: drawPuzzleFigure, sheets: chainSheets,
+    home: [-0.8, 0.3], title: P => `Wooden chain, ${P.links} links`, slug: (P, u) => `chain-${P.links}-links`,
+    hud: (m, u) => { const G = m.G; return { rows: [['Stick', `${fmtU(G.w, u)} × ${fmtU(G.w, u)} × ${fmtU(G.len, u)}`], ['Links', G.n], ['Link', `${fmtU(G.Ll, u)} × ${fmtU(G.w, u)}`], ['Link wood', fmtU(G.t, u)]], diff: G.t < 5 ? ['hard', 'Fiddly'] : ['mid', 'Moderate'], warn: G.notes.map(t => t.replace(/ to %[wl].*| so .*/, '')) }; },
+  },
+  relief: {
+    key: 'RP', def: RELIEF_DEFAULT, params: RELIEF_PARAMS, build: (P, opt) => buildRelief(P, opt, S.img), draw: drawReliefFigure, sheets: reliefSheets,
+    home: [-Math.PI / 2, 0.95], title: () => `Relief: ${(S.img && S.img.name) || 'picture'}`, slug: (P, u) => `relief-${(S.imgName || 'picture').replace(/\.[^.]*$/, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`,
+    hud: (m, u) => { const G = m.G; return { rows: [['Panel', `${fmtU(G.W, u)} × ${fmtU(G.Hp, u)} × ${fmtU(G.T, u)}`], ['Levels', `${G.L}, ${fmtLen(G.step, u, { den: 32 })} apart`], ['Deepest', fmtU(G.D, u)], ['Style', G.P.style]], diff: G.L <= 3 ? ['easy', 'Good first relief'] : G.L <= 5 ? ['mid', 'Moderate'] : ['hard', 'Lots of levels'] }; },
+  },
+};
+
 const S = {
   project: 'surface',
   P: { ...PRESETS[0].P, res: 96 },
   FP: { ...FACE_DEFAULT },
   MP: { ...MP_DEFAULT },
+  CP: { ...CHIP_DEFAULT }, SP: { ...SPOON_DEFAULT }, KP: { ...CAGE_DEFAULT }, NP: { ...CHAIN_DEFAULT }, RP: { ...RELIEF_DEFAULT },
+  img: null, imgName: 'sample', imgSource: 'sample', imgHash: 'sample',
   opt: { ...DEFAULT_OPT, jack: { ...JACK_DEFAULT }, grain: 'z' },
   raw: null, rawInfo: null, rawHash: 'sample',
   model: null, plan: null, steps: null, mesh: null, toolMap: false, proj: null,
@@ -61,12 +115,14 @@ function loadSaved() {
       if (s.FP) S.FP = normalizeFace({ ...S.FP, ...s.FP });
       if (s.MP) Object.assign(S.MP, s.MP);
       if (s.opt) { const j = { ...JACK_DEFAULT, ...(s.opt.jack || {}) }; Object.assign(S.opt, s.opt); S.opt.jack = j; }
-      if (['face', 'surface', 'model'].includes(s.project)) S.project = s.project;
+      for (const k of ['CP', 'SP', 'KP', 'NP', 'RP']) if (s[k]) Object.assign(S[k], s[k]);
+      if (s.img && s.img.source === 'file') { S.imgSource = 'file'; S.imgName = s.img.name; }
+      if (PROJECTS.some(p => p.id === s.project)) S.project = s.project;
     } else if (s.opt) { S.opt.units = s.opt.units || S.opt.units; S.opt.grain = s.opt.grain || S.opt.grain; }
   } catch (e) { /* storage unavailable */ }
 }
 function save() {
-  try { localStorage.setItem('kerf:params', JSON.stringify({ v: 3, project: S.project, P: S.P, FP: S.FP, MP: S.MP, opt: S.opt })); } catch (e) { /* ignore */ }
+  try { localStorage.setItem('kerf:params', JSON.stringify({ v: 3, project: S.project, P: S.P, FP: S.FP, MP: S.MP, CP: S.CP, SP: S.SP, KP: S.KP, NP: S.NP, RP: S.RP, img: { source: S.imgSource, name: S.imgName }, opt: S.opt })); } catch (e) { /* ignore */ }
 }
 function hashStr(s) {
   let h = 2166136261;
@@ -75,6 +131,8 @@ function hashStr(s) {
 }
 function designKey() {
   const o = S.opt;
+  const sp = STAGED[S.project];
+  if (sp) return hashStr(JSON.stringify([S.project, S[sp.key], S.project === 'relief' ? S.imgHash : '']));
   const parts = S.project === 'face' ? ['face', S.FP]
     : S.project === 'model' ? ['model', S.rawHash, S.MP, o.drill, o.saw, o.bandStep, o.roughMargin, o.drillMargin]
       : ['surface', S.P, o.drill, o.saw, o.bandStep, o.roughMargin, o.drillMargin];
@@ -92,23 +150,24 @@ function idb() {
     } catch (e) { rej(e); }
   });
 }
-async function storeFile(name, buffer) {
-  try { const db = await idb(); db.transaction('files', 'readwrite').objectStore('files').put({ name, buffer }, 'model'); } catch (e) { /* storage unavailable */ }
+async function storeFile(name, buffer, key = 'model') {
+  try { const db = await idb(); db.transaction('files', 'readwrite').objectStore('files').put({ name, buffer }, key); } catch (e) { /* storage unavailable */ }
 }
-async function loadStoredFile() {
+async function loadStoredFile(key = 'model') {
   try {
     const db = await idb();
-    return await new Promise(res => { const r = db.transaction('files').objectStore('files').get('model'); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); });
+    return await new Promise(res => { const r = db.transaction('files').objectStore('files').get(key); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); });
   } catch (e) { return null; }
 }
 
 // ---------------------------------------------------------------- UI
-let view, guide;
+let view, guide, shop;
 const ctl = {};
 const U = mm => fmtLen(mm, S.opt.units);
 const uv = mm => +toUnits(mm, S.opt.units).toFixed(S.opt.units === 'in' ? 3 : 1);
 const isFace = () => S.project === 'face';
 const isModel = () => S.project === 'model';
+const isStaged = () => !!STAGED[S.project];
 
 function check(label, value, onChange) {
   const id = 'c-' + label.toLowerCase().replace(/[^a-z]+/g, '-');
@@ -122,21 +181,22 @@ function buildPanel() {
   const p = $('panel');
   p.innerHTML = '';
   const sp0 = section(p, 'Project');
-  row(sp0, 'Carve', segmented([{ id: 'surface', name: 'Math surface' }, { id: 'face', name: 'Corner face' }, { id: 'model', name: 'Your model' }], S.project, v => {
+  row(sp0, 'Carve', select(PROJECTS, S.project, v => {
     S.project = v; buildPanel(); recompute(true);
   }));
-  if (isFace()) buildFacePanel(p); else if (isModel()) buildModelPanel(p); else buildSurfacePanel(p);
+  if (isFace()) buildFacePanel(p); else if (isModel()) buildModelPanel(p); else if (isStaged()) buildStagedPanel(p); else buildSurfacePanel(p);
   buildJackPanel(p);
   buildPlanPanel(p);
   const se = section(p, 'Export', false);
   se.append(el('div', { class: 'btns' },
+    el('button', { type: 'button', class: 'primary-light', onclick: makeBooklet }, 'PDF booklet'),
     el('button', { type: 'button', onclick: printSheets }, isFace() ? 'Print layout sheet' : 'Print templates'),
     el('button', { type: 'button', onclick: saveSheets }, 'Save sheets (.html)'),
     el('button', { type: 'button', onclick: saveSTL }, 'Download STL'),
   ));
-  se.append(el('div', { class: 'hint' }, 'The STL is the finished shape at true size. A 3D-printed copy makes a good reference to hold while you carve.'));
+  se.append(el('div', { class: 'hint' }, 'The PDF booklet has the whole guide and the true-scale templates in one file. The STL is the finished shape at true size: a 3D-printed copy makes a good reference to hold while you carve.'));
   $('b-print').textContent = isFace() ? 'Print layout' : 'Print templates';
-  $('v-tool-wrap').hidden = isFace();
+  $('v-tool-wrap').hidden = isFace() || isStaged();
 }
 
 function buildSurfacePanel(p) {
@@ -229,6 +289,64 @@ function buildFacePanel(p) {
   optSel3('mustache', 'Mustache');
 }
 
+// panels for the staged projects, built from each engine's PARAMS schema
+function buildStagedPanel(p) {
+  const spec = STAGED[S.project], P = S[spec.key], u = S.opt.units;
+  const changed = rebuild => { if (rebuild) buildPanel(); recompute(); };
+  if (S.project === 'relief') {
+    const si = section(p, 'Picture');
+    si.append(el('div', { class: 'btns' },
+      el('button', { type: 'button', class: 'primary-light', onclick: () => $('img-in').click() }, 'Open a picture…'),
+      S.imgSource !== 'sample' ? el('button', { type: 'button', onclick: useSampleImage }, 'Use the sample') : null));
+    si.append(el('div', { class: 'modelinfo' }, el('b', {}, (S.img && S.img.name) || 'Sample picture'), S.img ? el('span', {}, `${S.img.w0 || S.img.w} × ${S.img.h0 || S.img.h} px`) : null));
+    si.append(el('div', { class: 'hint' }, 'Strong shapes and clear contrast work best: a silhouette, a simple landscape, a logo or lettering. Busy photos turn into lots of tiny areas.'));
+  }
+  let sec = null;
+  for (const f of spec.params) {
+    if (f.section) { sec = section(p, f.section); continue; }
+    if (f.show && !f.show(P)) continue;
+    let ctrl;
+    if (f.type === 'seg') ctrl = segmented(f.options.map(([id, name]) => ({ id, name })), String(P[f.key]), v => { P[f.key] = v; changed(true); });
+    else if (f.type === 'select') ctrl = select(f.options.map(([id, name]) => ({ id, name })), String(P[f.key]), v => { P[f.key] = v; changed(true); });
+    else if (f.type === 'check') { ctrl = el('div', { class: 'checks' }, check(f.label, P[f.key], v => { P[f.key] = v; changed(false); })); }
+    else if (f.type === 'len') ctrl = numberField({ value: uv(P[f.key]), step: u === 'in' ? (f.max <= 1.01 * IN ? 0.0625 : 0.125) : (f.max <= 30 ? 0.5 : 1), min: 0, suffix: u, onChange: v => { P[f.key] = Math.max(f.min, Math.min(f.max, fromUnits(v, u))); changed(true); } });
+    else if (f.type === 'int' || f.type === 'range') ctrl = slider({ min: f.min, max: f.max, step: f.step || 1, value: P[f.key], fmt: f.fmt || (v => String(v)), onChange: v => { P[f.key] = v; changed(true); } });
+    const r = row(sec, f.type === 'check' ? '' : f.label, ctrl, f.hint);
+    if (f.type === 'check') r.classList.add('check-row');
+  }
+  const sr = section(p, 'Start again', false);
+  sr.append(el('div', { class: 'btns' }, el('button', { type: 'button', onclick: () => { S[spec.key] = { ...spec.def }; buildPanel(); recompute(true); } }, 'Reset these settings')));
+}
+
+// ---------------------------------------------------------------- relief pictures
+async function decodeImage(blob, name) {
+  const bmp = await createImageBitmap(blob);
+  const s = Math.min(1, 600 / Math.max(bmp.width, bmp.height));
+  const w = Math.max(2, Math.round(bmp.width * s)), h = Math.max(2, Math.round(bmp.height * s));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(bmp, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data, data = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) data[i] = (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
+  return { w, h, data, name, w0: bmp.width, h0: bmp.height };
+}
+async function openImage(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type) && !/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(file.name)) { toast('That isn’t a picture Kerf can read. Use a PNG, JPEG, GIF or WebP.'); return; }
+  try {
+    const buf = await file.arrayBuffer();
+    S.img = await decodeImage(new Blob([buf], { type: file.type }), file.name);
+    S.imgName = file.name; S.imgSource = 'file'; S.imgHash = hashStr(file.name + file.size + file.lastModified);
+    storeFile(file.name, buf, 'image');
+    S.project = 'relief';
+    buildPanel(); recompute(true);
+  } catch (e) { toast('Couldn’t read that picture: ' + (e.message || e)); }
+}
+function useSampleImage() {
+  S.img = sampleImage(); S.imgName = 'sample'; S.imgSource = 'sample'; S.imgHash = 'sample';
+  buildPanel(); recompute(true);
+}
+
 function buildModelPanel(p) {
   const M = S.MP, step = S.opt.units === 'in' ? 0.25 : 5;
   const sm = section(p, 'Model');
@@ -270,7 +388,7 @@ function buildJackPanel(p) {
 function buildPlanPanel(p) {
   const sl = section(p, 'Plan', isModel());
   row(sl, 'Units', segmented([{ id: 'in', name: 'Inches' }, { id: 'mm', name: 'Millimetres' }], S.opt.units, v => { S.opt.units = v; buildPanel(); recompute(); }));
-  if (isFace()) return;
+  if (isFace() || isStaged()) return;
   const r = row(sl, 'Helpers', el('div', { class: 'checks' },
     check('Saw the outline first', S.opt.saw, v => { S.opt.saw = v; buildPanel(); recompute(); }),
     check('Drill bulk waste', S.opt.drill, v => { S.opt.drill = v; buildPanel(); recompute(); })), 'Both off: everything is done with the Jack. A coping saw is the quickest way to rough out a figure.');
@@ -363,8 +481,24 @@ function plannedProject(model) {
   };
 }
 
+function stagedProject() {
+  const opt = S.opt, spec = STAGED[S.project];
+  if (S.project === 'relief' && !S.img) S.img = sampleImage();
+  const { model, steps } = spec.build(S[spec.key], opt);
+  const last = model.stages.length - 1;
+  const finalMesh = stagedMesh(model, last);
+  for (let v = 0; v < finalMesh.nv; v++) finalMesh.aux[v * 3] = 0;
+  return {
+    kind: S.project, model, plan: null, steps, toolUniforms: null, finalMesh,
+    view: { yaw: spec.home[0], pitch: spec.home[1] },
+    meshAt: k => stagedMesh(model, k),
+    draw: (cv, fig, slice, state) => spec.draw(cv, model, fig, opt, typeof state === 'number' ? state : last),
+  };
+}
+
 function makeProject() {
   const opt = S.opt;
+  if (isStaged()) return stagedProject();
   if (isFace()) {
     S.FP.H = Math.max(S.FP.H, minStickLength(S.FP));
     const model = buildFaceModel(S.FP);
@@ -412,6 +546,7 @@ let computeToken = 0;
 function recompute(reframe = false) {
   save();
   const token = ++computeToken;
+  S.computing = true;
   setBusy(true);
   setTimeout(() => {
     if (token !== computeToken) return;
@@ -420,7 +555,10 @@ function recompute(reframe = false) {
       const pr = makeProject();
       S.proj = pr; S.model = pr.model; S.plan = pr.plan; S.steps = pr.steps;
       S.mesh = pr.finalMesh; S.meshTool = false;
-      if (pr.kind === 'face') {
+      if (STAGED[pr.kind]) {
+        view.setScene(pr.model.dims, 'z', { noLabels: true });
+        if (reframe || S.framed !== pr.kind) { view.frame(Math.max(...pr.model.dims) * 2.5, false, STAGED[pr.kind].home); S.framed = pr.kind; }
+      } else if (pr.kind === 'face') {
         const g = pr.model.g;
         view.setScene(pr.model.dims, 'z', { target: [0, 0, (g.zt + g.zHandle) / 2], noLabels: true });
         if (reframe || S.framed !== 'face') { view.frame((g.zt - g.zHandle) * 3.1, true); S.framed = 'face'; }
@@ -435,13 +573,14 @@ function recompute(reframe = false) {
       if (isModel()) { const bd = document.querySelector('.blockdims'); if (bd) bd.textContent = `Block: ${U(pr.model.P.W)} × ${U(pr.model.P.D)} × ${U(pr.model.P.H)}`; else buildPanel(); }
       S.ms = performance.now() - t0;
     } catch (e) { fatal(e); }
+    S.computing = false;
     setBusy(false);
   }, 20);
 }
 
 function showFinal() {
   const pr = S.proj;
-  const tool = S.toolMap && pr.kind !== 'face';
+  const tool = S.toolMap && !!pr.plan;
   if (tool && !S.meshTool) { applyToolData(S.mesh, S.model, S.plan.jack.J.grip); S.meshTool = true; }
   view.setMesh(S.mesh);
   view.setToolMap(tool, pr.toolUniforms);
@@ -456,6 +595,13 @@ function toolKey(on) {
 }
 
 function hud() {
+  if (isStaged()) {
+    const h = STAGED[S.project].hud(S.model, S.opt.units, S.opt);
+    $('hud').innerHTML = h.rows.map(([k, v]) => `<div class="hud-row"><span>${k}</span>${String(v).startsWith('<b') ? v : `<b>${v}</b>`}</div>`).join('')
+      + `<div class="hud-row"><span>Guide</span><b>${S.steps.length} steps</b></div><div class="hud-diff ${h.diff[0]}">${h.diff[1]}</div>`
+      + (h.warn || []).map(w => `<div class="hud-warn">${w}</div>`).join('');
+    return;
+  }
   if (isFace()) {
     const m = S.model, g = m.g, P = m.P;
     const n = m.cuts.length, lvl = n <= 13 ? ['easy', 'Good first face'] : n <= 17 ? ['mid', 'Moderate'] : ['hard', 'Lots of detail'];
@@ -504,7 +650,9 @@ function closeGuideUI() {
   $('guide').hidden = true;
   $('b-guide').textContent = 'Start carving guide';
   if (S.mesh) showFinal();
+  if (shop && shop.on) shop.exit();
   if (isFace()) view.lookCorner();
+  else view.resetView();
 }
 
 // ---------------------------------------------------------------- export
@@ -516,12 +664,14 @@ function download(name, data, type) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 function fileStem() {
+  if (isStaged()) return 'kerf-' + STAGED[S.project].slug(S[STAGED[S.project].key], S.opt.units);
   if (isFace()) return `kerf-face-${Math.round(toUnits(S.FP.a, S.opt.units) * 100) / 100}${S.opt.units}`;
   if (isModel()) return `kerf-${S.MP.name.replace(/\.[^.]*$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'model'}-${Math.round(toUnits(S.MP.size, S.opt.units) * 100) / 100}${S.opt.units}`;
   const P = S.P;
   return `kerf-${P.surface}-${P.mode}-${Math.round(toUnits(P.W, S.opt.units) * 100) / 100}${S.opt.units}`;
 }
 function sheetsHTML() {
+  if (isStaged()) return STAGED[S.project].sheets(S.model, S.opt, VERSION);
   if (!isFace()) return buildPrintHTML(S.model, S.plan, S.opt, VERSION);
   const m = S.model, R = reliefMap(m.stages[m.stages.length - 1], m.g, { W: 320 });
   const cv = document.createElement('canvas');
@@ -549,6 +699,36 @@ function saveSTL() {
   download(fileStem() + '.stl', meshToSTL(S.mesh, fileStem()));
 }
 
+function projectTitle() {
+  if (isStaged()) return STAGED[S.project].title(S[STAGED[S.project].key]);
+  if (isFace()) { const st = FACE_STYLES.find(x => x.id === S.FP.style); return st ? `Corner face: ${st.name.replace(/ \(.*\)$/, '')}` : 'Corner face'; }
+  if (isModel()) return S.MP.name.replace(/\.[^.]*$/, '');
+  const sf = SURFACES.find(x => x.id === S.P.surface), md = MODES.find(m => m.id === S.P.mode);
+  return `${sf ? sf.name : 'Surface'} ${md && md.id === 'sheet' ? 'sheet' : 'block'}`;
+}
+let bookletBusy = false;
+async function makeBooklet() {
+  if (bookletBusy) return;
+  bookletBusy = true;
+  while (S.computing) await new Promise(r => setTimeout(r, 50));   // finish any pending recompute first
+  if (!S.proj) { bookletBusy = false; return; }
+  const busy = $('busy'), label = busy.querySelector('span'), old = label.textContent;
+  busy.hidden = false;
+  const stats = [...$('hud').querySelectorAll('.hud-row')].map(r => [r.children[0].textContent, r.children[1].textContent]);
+  try {
+    const bytes = await buildBooklet({
+      project: S.proj, opt: S.opt, view, guide, version: VERSION, title: projectTitle(),
+      subtitle: `${PROJECTS.find(p => p.id === S.project).name} · ${S.opt.jack.hand === 'left' ? 'left' : 'right'}-handed Carvin’ Jack · ${new Date().toLocaleDateString()}`,
+      stats, sheetsHTML: sheetsHTML(), fmt: U,
+      onProgress: (f, msg) => { label.textContent = `Making the PDF booklet… ${msg}`; },
+      restore: () => { if (guide.open) guide.go(guide.i); else { showFinal(); if (isFace()) view.lookCorner(); else view.resetView(); } },
+    });
+    download(fileStem() + '-guide.pdf', new Blob([bytes], { type: 'application/pdf' }));
+    toast(`Saved ${fileStem()}-guide.pdf (${Math.round(bytes.length / 1024)} KB).`);
+  } catch (e) { console.error(e); toast('Couldn’t make the booklet: ' + (e.message || e)); }
+  label.textContent = old; busy.hidden = true; bookletBusy = false;
+}
+
 function toast(msg) {
   const t = $('toast');
   t.textContent = msg; t.classList.add('show');
@@ -572,9 +752,11 @@ function bindDrop() {
   stage.addEventListener('drop', e => {
     e.preventDefault(); depth = 0; hint.hidden = true;
     const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) openFile(f);
+    if (f && (/^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(f.name))) openImage(f);
+    else if (f) openFile(f);
   });
   $('file-in').addEventListener('change', e => { openFile(e.target.files[0]); e.target.value = ''; });
+  $('img-in').addEventListener('change', e => { openImage(e.target.files[0]); e.target.value = ''; });
 }
 
 async function boot() {
@@ -584,6 +766,15 @@ async function boot() {
     view = new View3D($('gl'), $('labels'));
   } catch (e) { fatal(e); return; }
   guide = new Guide({ view, onClose: closeGuideUI, onToolKey: toolKey });
+  shop = new Shop({ guide, toast });
+  $('g-shop').onclick = () => shop.toggle();
+  if (S.imgSource === 'file') {
+    const f = await loadStoredFile('image');
+    try {
+      if (f && f.name === S.imgName) { S.img = await decodeImage(new Blob([f.buffer]), f.name); S.imgHash = hashStr(f.name + f.buffer.byteLength); }
+      else { S.imgSource = 'sample'; S.imgName = 'sample'; }
+    } catch (e) { S.imgSource = 'sample'; S.imgName = 'sample'; }
+  }
   if (S.MP.source === 'file') {
     const f = await loadStoredFile();
     try {
@@ -599,6 +790,15 @@ async function boot() {
   $('v-tool').onchange = e => { S.toolMap = e.target.checked; if (!guide.open && S.mesh) showFinal(); };
   $('panel-toggle').onclick = () => document.body.classList.toggle('panel-open');
   recompute(true);
-  window.kerf = { S, view, guide, VERSION, openGuide, recompute, buildPanel, openFile, useSample };
+  window.kerf = { S, view, guide, shop, VERSION, openGuide, recompute, buildPanel, openFile, openImage, useSample, makeBooklet, sheetsHTML, STAGED };
+  registerSW();
+}
+
+// offline: cache the app with a service worker (needs https or localhost)
+function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  const ok = location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname);
+  if (!ok || new URLSearchParams(location.search).has('nosw')) return;
+  navigator.serviceWorker.register('sw.js').catch(() => { /* offline support unavailable */ });
 }
 boot();

@@ -11,7 +11,7 @@ import { model as jackModel } from '../engine/jack.js';
 const INK = '#2a241f', PAPER = '#f6f1e7', WOOD = '#e2c9a2', CUT = '#d66828';
 
 function setup(canvas, cssW, cssH) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = canvas._dpr || Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
   canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
   const ctx = canvas.getContext('2d');
@@ -152,7 +152,7 @@ function drawLayout(canvas, cssW, model, fig, opt) {
 }
 
 export function drawFaceFigure(canvas, model, fig, opt) {
-  const cssW = Math.max(240, Math.floor(canvas.parentElement.clientWidth));
+  const cssW = Math.max(240, Math.floor((canvas.parentElement && canvas.parentElement.clientWidth) || canvas._cssW || 520));
   switch (fig.type) {
     case 'faceCut': return drawCut(canvas, cssW, model, fig);
     case 'faceFinal': return drawFinal(canvas, cssW, model);
