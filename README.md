@@ -223,6 +223,10 @@ sw.js · manifest.webmanifest · icon.svg   (offline and install)
 tests/   engine.test.mjs, meshio.test.mjs, projects.test.mjs (node) · browser.mjs (playwright walkthrough)
 ```
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
 ---
 
 Created with help from Claude AI
